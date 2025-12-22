@@ -35,7 +35,8 @@ MoveItConfigsBuilder(
         velocity_control=False
         add_gripper=False
         add_vacuum_gripper=False
-        add_bio_gripper=False,
+        add_bio_gripper=False
+        add_rg2_gripper=False
         ros2_control_plugin='uf_robot_hardware/UFRobotSystemHardware'
         add_realsense_d435i=False
         add_d435i_links=True
@@ -256,6 +257,7 @@ class MoveItConfigsBuilder(ParameterBuilder):
         add_gripper = get_param_str('add_gripper', False)
         add_vacuum_gripper = get_param_str('add_vacuum_gripper', False)
         add_bio_gripper = get_param_str('add_bio_gripper', False)
+        add_rg2_gripper = get_param_str('add_rg2_gripper', False)
         add_realsense_d435i = get_param_str('add_realsense_d435i', False)
         add_d435i_links = get_param_str('add_d435i_links', True)
         use_gazebo_camera = get_param_str('use_gazebo_camera', False)
@@ -277,6 +279,7 @@ class MoveItConfigsBuilder(ParameterBuilder):
         self.__robot_type = robot_type
         self.__add_gripper = add_gripper
         self.__add_bio_gripper = add_bio_gripper
+        self.__add_rg2_gripper = add_rg2_gripper
         self.__controllers_name = (controllers_name.perform(context) if context is not None else controllers_name) if isinstance(controllers_name, LaunchConfiguration) else controllers_name
 
         self.__urdf_xacro_args = {
@@ -303,6 +306,7 @@ class MoveItConfigsBuilder(ParameterBuilder):
             'add_gripper': add_gripper,
             'add_vacuum_gripper': add_vacuum_gripper,
             'add_bio_gripper': add_bio_gripper,
+            'add_rg2_gripper': add_rg2_gripper,
             'add_realsense_d435i': add_realsense_d435i,
             'add_d435i_links': add_d435i_links,
             'use_gazebo_camera': use_gazebo_camera,
@@ -326,6 +330,7 @@ class MoveItConfigsBuilder(ParameterBuilder):
             'add_gripper': add_gripper,
             'add_vacuum_gripper': add_vacuum_gripper,
             'add_bio_gripper': add_bio_gripper,
+            'add_rg2_gripper': add_rg2_gripper,
             'add_other_geometry': add_other_geometry,
         }
 
@@ -537,6 +542,19 @@ class MoveItConfigsBuilder(ParameterBuilder):
                             controllers_yaml[name] = gripper_controllers_yaml[name]
             elif self.__robot_type != 'lite' and self.__add_bio_gripper in ('True', 'true'):
                 gripper_controllers_yaml = load_yaml(self._package_path / 'config' / 'bio_gripper' / controllers_name)
+                if gripper_controllers_yaml and 'controller_names' in gripper_controllers_yaml:
+                    for name in gripper_controllers_yaml['controller_names']:
+                        if name in gripper_controllers_yaml:
+                            if name not in controllers_yaml['controller_names']:
+                                controllers_yaml['controller_names'].append(name)
+                            controllers_yaml[name] = gripper_controllers_yaml[name]
+            elif self.__robot_type != 'lite' and self.__add_rg2_gripper in ('True', 'true'):
+                # Load RG2 gripper controllers from mmr_arm_description
+                from pathlib import Path
+                import os
+                from ament_index_python import get_package_share_directory
+                rg2_config_path = Path(get_package_share_directory('mmr_arm_description')) / 'config' / 'rg2_moveit_controllers.yaml'
+                gripper_controllers_yaml = load_yaml(rg2_config_path)
                 if gripper_controllers_yaml and 'controller_names' in gripper_controllers_yaml:
                     for name in gripper_controllers_yaml['controller_names']:
                         if name in gripper_controllers_yaml:

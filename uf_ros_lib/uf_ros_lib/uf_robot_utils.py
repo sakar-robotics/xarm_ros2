@@ -142,8 +142,8 @@ def add_prefix_to_ros2_control_params(prefix, ros2_control_params):
             controller_manager_ros__parameters[new_name] = controller_manager_ros__parameters.pop(name)
 
 
-def generate_ros2_control_params_temp_file(ros2_control_params_path, prefix='', add_gripper=False, add_bio_gripper=False, ros_namespace='', update_rate=None, robot_type='xarm', use_sim_time=False):
-    if ros_namespace or prefix or add_gripper or add_bio_gripper or update_rate:
+def generate_ros2_control_params_temp_file(ros2_control_params_path, prefix='', add_gripper=False, add_bio_gripper=False, add_rg2_gripper=False, ros_namespace='', update_rate=None, robot_type='xarm', use_sim_time=False):
+    if ros_namespace or prefix or add_gripper or add_bio_gripper or add_rg2_gripper or update_rate:
         with open(ros2_control_params_path, 'r') as f:
             ros2_control_params_yaml = yaml.safe_load(f)
         if update_rate is not None:
@@ -170,6 +170,9 @@ def generate_ros2_control_params_temp_file(ros2_control_params_path, prefix='', 
                     ros2_control_params_yaml['controller_manager']['ros__parameters'][name] = value
                     if name in gripper_control_params_yaml:
                         ros2_control_params_yaml[name] = gripper_control_params_yaml[name]
+        elif add_rg2_gripper:
+            # RG2 gripper uses OnRobotRGControllerServer directly, no ros2_control config needed
+            pass
                 
         add_prefix_to_ros2_control_params(prefix, ros2_control_params_yaml)
         if ros_namespace:
