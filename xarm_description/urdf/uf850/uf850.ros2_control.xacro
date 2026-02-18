@@ -26,6 +26,7 @@
           <param name="robot_type">uf850</param>
           <param name="add_gripper">${add_gripper}</param>
           <param name="add_bio_gripper">${add_bio_gripper}</param>
+          <param name="rw_rate">150.0</param>
         </xacro:if>
         <!-- fake -->
         <!-- <plugin>fake_components/GenericSystem</plugin> -->
