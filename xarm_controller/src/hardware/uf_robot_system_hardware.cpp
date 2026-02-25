@@ -307,7 +307,9 @@ namespace uf_robot_hardware
         // if (read_cnts_ % 6000 == 0) {
         //     RCLCPP_INFO(LOGGER, "[%s] [READ] cnt: %ld, max: %f, mean: %f, failed: %ld", robot_ip_.c_str(), read_cnts_, read_max_time_, read_total_time_ / read_cnts_, read_failed_cnts_);
         // }
-        if (read_code_ == 0 && read_ready_) {
+        // Always propagate fresh joint samples when low-level reads succeed.
+        // Readiness gating is handled in write() to avoid freezing /joint_states.
+        if (read_code_ == 0) {
             for (int j = 0; j < info_.joints.size(); j++) {
                 position_states_[j] = joint_state_msg_->position[j];
                 velocity_states_[j] = joint_state_msg_->velocity[j];
@@ -341,6 +343,12 @@ namespace uf_robot_hardware
         if (_need_reset()) {
             initialized_ = false;
             _deactivate_controller();
+            return hardware_interface::return_type::OK;
+        }
+        if (!_xarm_is_ready_write()) {
+            // Keep controllers alive so joint states keep publishing, but skip writes while arm is not writable.
+            initialized_ = false;
+            write_code_ = 0;
             return hardware_interface::return_type::OK;
         }
         initialized_ = true;
@@ -391,6 +399,7 @@ namespace uf_robot_hardware
                 }
             }
         }
+        write_code_ = cmd_ret;
 
         return hardware_interface::return_type::OK;
     }
@@ -458,7 +467,7 @@ namespace uf_robot_hardware
             }
         }
         last_err = curr_err;
-        return last_err == 0;
+        return xarm_driver_.is_connected();
     }
 
     bool UFRobotSystemHardware::_xarm_is_ready_write(void)
@@ -466,13 +475,25 @@ namespace uf_robot_hardware
         static bool last_not_ready = false;
         static int last_state = xarm_driver_.curr_state;
         static int last_mode = xarm_driver_.curr_mode;
+        static int last_err = xarm_driver_.curr_err;
         int curr_mode = xarm_driver_.curr_mode;
 		int curr_state = xarm_driver_.curr_state;
+        int curr_err = xarm_driver_.curr_err;
 
         if (!_xarm_is_ready_read()) {
             last_not_ready = true;
             return false;
         }
+
+        if (curr_err != 0) {
+            if (last_err != curr_err) {
+                RCLCPP_WARN(LOGGER, "[%s] Robot write blocked by error C%d", robot_ip_.c_str(), curr_err);
+            }
+            last_err = curr_err;
+            last_not_ready = true;
+            return false;
+        }
+        last_err = curr_err;
 
         if (curr_state > 2) {
             if (last_state != curr_state) {
@@ -503,7 +524,6 @@ namespace uf_robot_hardware
 
     bool UFRobotSystemHardware::_need_reset()
     {
-        bool is_not_ready = !_xarm_is_ready_write();
         bool write_succeed = write_code_ == 0;
         if (!write_succeed) {
             // int ret = xarm_driver_.arm->set_state(XARM_STATE::STOP);
@@ -521,7 +541,6 @@ namespace uf_robot_hardware
             }
             write_code_ = 0;
         }
-        return is_not_ready || !write_succeed || read_code_ != 0 || !read_ready_;
+        return !write_succeed || read_code_ != 0;
     }
 }
-
