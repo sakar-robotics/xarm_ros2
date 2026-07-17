@@ -92,6 +92,12 @@ namespace xarm_api
         bool in_ros_control_;
         int vacuum_gripper_hardware_version_;
         std::string report_type_;
+        // MMR: forces update_joint_states() to use the legacy single-value
+        // get_servo_angle() query instead of the combined get_joint_states()
+        // query, for simulators whose combined-query response doesn't
+        // populate the position field correctly. Defaults off (real hardware
+        // and correctly-implemented controllers are unaffected).
+        bool force_legacy_joint_read_;
         std::vector<std::string> joint_names_;
         sensor_msgs::msg::JointState joint_state_msg_;
         geometry_msgs::msg::WrenchStamped ftsensor_msg_;
