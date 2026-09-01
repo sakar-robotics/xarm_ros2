@@ -103,7 +103,7 @@ namespace uf_robot_hardware
         }
 
         RCLCPP_INFO(LOGGER, "[%s] namespace: %s", robot_ip_.c_str(), node_->get_namespace());
-        RCLCPP_INFO(LOGGER, "[%s] robot_type: %s, hw_ns: %s, prefix: %s, report_type: %s", 
+        RCLCPP_INFO(LOGGER, "[%s] robot_type: %s, hw_ns: %s, prefix: %s, report_type: %s",
             robot_ip_.c_str(), robot_type.c_str(), hw_ns.c_str(), prefix.c_str(), report_type.c_str());
 
         int dof = 7;
@@ -132,7 +132,7 @@ namespace uf_robot_hardware
         if (it != info_.hardware_parameters.end()) {
             add_gripper = (it->second == "True" || it->second == "true");
         }
-        
+
         if (robot_type == "lite") add_gripper = false;
         node_->set_parameter(rclcpp::Parameter("add_gripper", add_gripper));
 
@@ -141,7 +141,7 @@ namespace uf_robot_hardware
         if (it != info_.hardware_parameters.end()) {
             add_bio_gripper = (it->second == "True" || it->second == "true");
         }
-        
+
         if (robot_type == "lite") add_bio_gripper = false;
         node_->set_parameter(rclcpp::Parameter("add_bio_gripper", add_bio_gripper));
 
@@ -149,9 +149,9 @@ namespace uf_robot_hardware
         if (it != info_.hardware_parameters.end()) {
             velocity_control_ = (it->second == "True" || it->second == "true");
         }
-        RCLCPP_INFO(LOGGER, "[%s] dof: %d, velocity_control: %d, add_gripper: %d, add_bio_gripper: %d, baud_checkset: %d, default_gripper_baud: %d", 
+        RCLCPP_INFO(LOGGER, "[%s] dof: %d, velocity_control: %d, add_gripper: %d, add_bio_gripper: %d, baud_checkset: %d, default_gripper_baud: %d",
             robot_ip_.c_str(), dof, velocity_control_, add_gripper, add_bio_gripper, baud_checkset, default_gripper_baud);
-        
+
         // 20250318, disable xarm_driver publish joint_states
         xarm_driver_.init(node_, robot_ip_, true);
         // 20250318, get joint_states msg reference from xarm_driver
@@ -179,7 +179,7 @@ namespace uf_robot_hardware
         memset(prev_cmds_float_, 0, sizeof(prev_cmds_float_));
 
         _init_ufactory_driver();
-        
+
         position_states_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
         velocity_states_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
         position_cmds_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
@@ -250,7 +250,7 @@ namespace uf_robot_hardware
         xarm_driver_.arm->clean_error();
         xarm_driver_.arm->clean_warn();
         xarm_driver_.arm->motion_enable(true);
-		xarm_driver_.arm->set_mode(velocity_control_ ? XARM_MODE::VELO_JOINT : XARM_MODE::SERVO);
+		xarm_driver_.arm->set_mode(XARM_MODE::POSE);
 		xarm_driver_.arm->set_state(XARM_STATE::START);
 
         req_list_controller_ = std::make_shared<controller_manager_msgs::srv::ListControllers::Request>();
@@ -260,6 +260,10 @@ namespace uf_robot_hardware
 
         client_list_controller_ = hw_node_->create_client<controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
         client_switch_controller_ = hw_node_->create_client<controller_manager_msgs::srv::SwitchController>("/controller_manager/switch_controller");
+
+
+        xarm_driver_.arm->set_ft_sensor_zero();
+        xarm_driver_.arm->set_ft_sensor_enable(true);
 
         for (uint i = 0; i < position_states_.size(); i++) {
             if (std::isnan(position_states_[i])) {
@@ -277,7 +281,7 @@ namespace uf_robot_hardware
                 velocity_cmds_[i] = velocity_states_[i];
             }
         }
-        
+
         RCLCPP_INFO(LOGGER, "[%s] System Sucessfully started!", robot_ip_.c_str());
         return CallbackReturn::SUCCESS;
     }
@@ -299,6 +303,7 @@ namespace uf_robot_hardware
         rclcpp::Time start = node_->get_clock()->now();
 
         read_code_ = xarm_driver_.update_joint_states(initialized_);
+        xarm_driver_.arm->set_ft_sensor_enable(true);
         // double time_sec = joint_state_msg_->header.stamp.seconds() - start.seconds();
         // read_total_time_ += time_sec;
         // if (time_sec > read_max_time_) {
@@ -351,10 +356,10 @@ namespace uf_robot_hardware
         }
         // std::string pos_str = "[ ";
         // std::string vel_str = "[ ";
-        // for (int i = 0; i < position_cmds_.size(); i++) { 
-        //     pos_str += std::to_string(position_cmds_[i]); 
+        // for (int i = 0; i < position_cmds_.size(); i++) {
+        //     pos_str += std::to_string(position_cmds_[i]);
         //     pos_str += " ";
-        //     vel_str += std::to_string(velocity_cmds_[i]); 
+        //     vel_str += std::to_string(velocity_cmds_[i]);
         //     vel_str += " ";
         // }
         // pos_str += "]";
@@ -363,7 +368,7 @@ namespace uf_robot_hardware
 
         int cmd_ret = 0;
         if (velocity_control_) {
-            for (int i = 0; i < velocity_cmds_.size(); i++) { 
+            for (int i = 0; i < velocity_cmds_.size(); i++) {
                 cmds_float_[i] = (float)velocity_cmds_[i];
             }
             // RCLCPP_INFO(LOGGER, "[%s] velocity: %s", robot_ip_.c_str(), vel_str.c_str());
@@ -373,7 +378,7 @@ namespace uf_robot_hardware
             }
         }
         else {
-            for (int i = 0; i < position_cmds_.size(); i++) { 
+            for (int i = 0; i < position_cmds_.size(); i++) {
                 cmds_float_[i] = (float)position_cmds_[i];
             }
             curr_write_time_ = node_->get_clock()->now();
@@ -385,7 +390,7 @@ namespace uf_robot_hardware
                 }
                 if (cmd_ret == 0) {
                     prev_write_time_ = curr_write_time_;
-                    for (int i = 0; i < 7; i++) { 
+                    for (int i = 0; i < 7; i++) {
                         prev_cmds_float_[i] = (float)cmds_float_[i];
                     }
                 }
