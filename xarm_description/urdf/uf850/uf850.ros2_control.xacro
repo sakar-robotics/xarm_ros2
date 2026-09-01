@@ -154,8 +154,10 @@
         <command_interface name="f_ref_5"/>
         <state_interface name="enable"/>
         <state_interface name="mode"/>
-        <state_interface name="is_started"/>
         <state_interface name="error"/>
+        <state_interface name="force_x"/>
+        <state_interface name="force_y"/>
+        <state_interface name="force_z"/>
       </gpio>
       <!-- End effector wrench, N and Nm. These interface names are what
            semantic_components::ForceTorqueSensor expects, so
