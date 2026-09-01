@@ -251,6 +251,22 @@ namespace uf_robot_hardware
         xarm_driver_.arm->clean_warn();
         xarm_driver_.arm->motion_enable(true);
 		xarm_driver_.arm->set_mode(XARM_MODE::POSE);
+        xarm_driver_.arm->set_state(XARM_STATE::START);
+
+        xarm_driver_.arm->set_ft_sensor_force_parameters(
+            coord = 0,
+            c_axis = [1,0,0,0,1,0],
+            f_ref = [8.0,0,0,0,0,0],
+            limits = [0.0,0.0,0.0,0.0,0.0,0.0]
+            kp = [0.005, 0.005, 0.005, 0.005, 0.005, 0.005],
+            kd = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05],
+            ki = [0.00005, 0.00005, 0.00005, 0.00005, 0.00005, 0.00005],
+            xe_limit = [200.0, 0.0, 0.0, 0.0, 0.01, 0.2],
+        )
+
+        xarm_driver_.arm->set_ft_sensor_enable(1);
+        xarm_driver_.arm->set_ft_sensor_zero();
+        xarm_driver_.arm->set_ft_sensor_mode(2);
 		xarm_driver_.arm->set_state(XARM_STATE::START);
 
         req_list_controller_ = std::make_shared<controller_manager_msgs::srv::ListControllers::Request>();
@@ -262,8 +278,8 @@ namespace uf_robot_hardware
         client_switch_controller_ = hw_node_->create_client<controller_manager_msgs::srv::SwitchController>("/controller_manager/switch_controller");
 
 
-        xarm_driver_.arm->set_ft_sensor_zero();
-        xarm_driver_.arm->set_ft_sensor_enable(true);
+
+
 
         for (uint i = 0; i < position_states_.size(); i++) {
             if (std::isnan(position_states_[i])) {
@@ -291,6 +307,9 @@ namespace uf_robot_hardware
         RCLCPP_INFO(LOGGER, "[%s] Stopping ...please wait...", robot_ip_.c_str());
 
         xarm_driver_.arm->set_mode(XARM_MODE::POSE);
+        xarm_driver_.arm->set_ft_sensor_mode(0);
+        xarm_driver_.arm->set_ft_sensor_enable(0);
+        xarm_driver_.arm->set_state(XARM_STATE::STOP);
 
         RCLCPP_INFO(LOGGER, "[%s] System sucessfully stopped!", robot_ip_.c_str());
         return CallbackReturn::SUCCESS;
