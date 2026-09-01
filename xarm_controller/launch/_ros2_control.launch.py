@@ -21,6 +21,28 @@ from uf_ros_lib.uf_robot_utils import get_xacro_content, generate_robot_api_para
 def launch_setup(context, *args, **kwargs):
     robot_ip = LaunchConfiguration('robot_ip', default='')
     report_type = LaunchConfiguration('report_type', default='normal')
+    # uf850 force control / homing / Cartesian write params
+    ft_sensor_mode = LaunchConfiguration('ft_sensor_mode', default='2')
+    ft_coord = LaunchConfiguration('ft_coord', default='1')
+    ft_c_axis = LaunchConfiguration('ft_c_axis', default='"0 0 1 0 1 0"')
+    ft_f_ref = LaunchConfiguration('ft_f_ref', default='"0 0 8 0 8 0"')
+    ft_limits = LaunchConfiguration('ft_limits', default='"0 0 0 0 0 0"')
+    ft_kp = LaunchConfiguration('ft_kp', default='"0.005 0.005 0.005 0.005 0.005 0.005"')
+    ft_ki = LaunchConfiguration('ft_ki', default='"0.00005 0.00005 0.00005 0.00005 0.00005 0.00005"')
+    ft_kd = LaunchConfiguration('ft_kd', default='"0.05 0.05 0.05 0.05 0.05 0.05"')
+    ft_xe_limit = LaunchConfiguration('ft_xe_limit', default='"200 200 200 0.1 0.1 0.1"')
+    ft_zero_on_activate = LaunchConfiguration('ft_zero_on_activate', default='true')
+    home_on_activate = LaunchConfiguration('home_on_activate', default='true')
+    home_pose = LaunchConfiguration('home_pose', default='')
+    home_joints = LaunchConfiguration('home_joints', default='')
+    home_speed = LaunchConfiguration('home_speed', default='100')
+    home_acc = LaunchConfiguration('home_acc', default='1000')
+    home_joint_speed = LaunchConfiguration('home_joint_speed', default='20')
+    home_joint_acc = LaunchConfiguration('home_joint_acc', default='200')
+    tcp_speed = LaunchConfiguration('tcp_speed', default='200')
+    tcp_acc = LaunchConfiguration('tcp_acc', default='2000')
+    tcp_radius = LaunchConfiguration('tcp_radius', default='-1')
+    cmd_queue_max = LaunchConfiguration('cmd_queue_max', default='16')
     baud_checkset = LaunchConfiguration('baud_checkset', default=True)
     default_gripper_baud = LaunchConfiguration('default_gripper_baud', default=2000000)
     prefix = LaunchConfiguration('prefix', default='')
@@ -82,6 +104,27 @@ def launch_setup(context, *args, **kwargs):
                 xacro_file=Path(get_package_share_directory('xarm_description')) / 'urdf' / 'xarm_device.urdf.xacro', 
                 robot_ip=robot_ip,
                 report_type=report_type,
+                ft_sensor_mode=ft_sensor_mode,
+                ft_coord=ft_coord,
+                ft_c_axis=ft_c_axis,
+                ft_f_ref=ft_f_ref,
+                ft_limits=ft_limits,
+                ft_kp=ft_kp,
+                ft_ki=ft_ki,
+                ft_kd=ft_kd,
+                ft_xe_limit=ft_xe_limit,
+                ft_zero_on_activate=ft_zero_on_activate,
+                home_on_activate=home_on_activate,
+                home_pose=home_pose,
+                home_joints=home_joints,
+                home_speed=home_speed,
+                home_acc=home_acc,
+                home_joint_speed=home_joint_speed,
+                home_joint_acc=home_joint_acc,
+                tcp_speed=tcp_speed,
+                tcp_acc=tcp_acc,
+                tcp_radius=tcp_radius,
+                cmd_queue_max=cmd_queue_max,
                 baud_checkset=baud_checkset,
                 default_gripper_baud=default_gripper_baud,
                 dof=dof,

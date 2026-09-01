@@ -70,6 +70,48 @@ namespace uf_robot_hardware
         std::vector<double> position_states_;
         std::vector<double> velocity_states_;
 
+        // Cartesian TCP command/state, SI units (m, rad). The arm is always in
+        // XARM_MODE::POSE, so motion is commanded with set_position(), not servoj.
+        std::vector<double> tcp_cmds_;
+        std::vector<double> tcp_states_;
+        std::vector<double> prev_tcp_cmds_;
+        // Commanded pose held on force-compliant axes. The controller applies the force
+        // correction as an offset on top of the command, so a compliant axis must be
+        // re-commanded to a fixed standoff or the command chases its own output.
+        double tcp_standoff_[6];
+
+        // End-effector force/torque, N and Nm, ordered fx fy fz tx ty tz
+        std::vector<double> ft_states_;
+
+        // Force control configuration (see set_ft_sensor_force_parameters)
+        int ft_sensor_mode_;
+        int ft_coord_;
+        int ft_c_axis_[6];
+        float ft_f_ref_[6];
+        float ft_limits_[6];
+        float ft_kp_[6];
+        float ft_ki_[6];
+        float ft_kd_[6];
+        float ft_xe_limit_[6];
+        bool ft_zero_on_activate_;
+
+        // Homing, performed on activation before the force loop is armed
+        bool home_on_activate_;
+        bool has_home_pose_;
+        bool has_home_joints_;
+        float home_pose_[6];     // mm, rad
+        float home_joints_[7];   // rad
+        float home_speed_;       // mm/s
+        float home_acc_;         // mm/s^2
+        float home_joint_speed_; // rad/s
+        float home_joint_acc_;   // rad/s^2
+
+        // set_position() parameters used by write()
+        float tcp_speed_;   // mm/s
+        float tcp_acc_;     // mm/s^2
+        float tcp_radius_;  // mm, <0 disables blending
+        int cmd_queue_max_; // skip write() when the controller cache is at least this deep
+
         bool velocity_control_;
         bool initialized_;
         bool read_ready_;
@@ -89,6 +131,7 @@ namespace uf_robot_hardware
         // rclcpp::Time curr_read_time_;
         rclcpp::Time curr_write_time_;
         rclcpp::Time prev_write_time_;
+        rclcpp::Time prev_rearm_time_;
 
         std::shared_ptr<rclcpp::Node> node_;
         std::shared_ptr<rclcpp::Node> hw_node_;
@@ -109,6 +152,15 @@ namespace uf_robot_hardware
         bool _check_cmds_is_change(float *prev, float *cur, double threshold = 0.0001);
         bool _xarm_is_ready_read(void);
         bool _xarm_is_ready_write(void);
+
+        // Parse a space separated list of n floats. Returns false if str is empty or
+        // does not hold exactly n values, leaving out untouched.
+        bool _parse_vecn(const std::string& str, float *out, int n);
+        void _init_ft_params(void);
+        int _setup_ft_sensor(void);
+        int _go_home(void);
+        bool _tcp_cmd_is_valid(void);
+        bool _tcp_cmds_is_change(double threshold = 0.00001);
 
         bool _need_reset(void);
 

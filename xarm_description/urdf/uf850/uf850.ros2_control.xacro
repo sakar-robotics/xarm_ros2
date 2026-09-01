@@ -5,6 +5,18 @@
     ros2_control_plugin:='uf_robot_hardware/UFRobotSystemHardware'
     hw_ns:='xarm' add_gripper:='false' add_bio_gripper:='false'
     robot_ip:='' report_type:='normal' baud_checkset:='true' default_gripper_baud:=2000000
+    ft_sensor_mode:=2 ft_coord:='1'
+    ft_c_axis:='0 0 1 0 1 0'
+    ft_f_ref:='0 0 8 0 8 0'
+    ft_limits:='0 0 0 0 0 0'
+    ft_kp:='0.005 0.005 0.005 0.005 0.005 0.005'
+    ft_ki:='0.00005 0.00005 0.00005 0.00005 0.00005 0.00005'
+    ft_kd:='0.05 0.05 0.05 0.05 0.05 0.05'
+    ft_xe_limit:='200 200 200 0.1 0.1 0.1'
+    ft_zero_on_activate:='true'
+    home_on_activate:='true' home_pose:='' home_joints:=''
+    home_speed:=100 home_acc:=1000 home_joint_speed:=20 home_joint_acc:=200
+    tcp_speed:=200 tcp_acc:=2000 tcp_radius:=-1 cmd_queue_max:=16
     joint1_lower_limit:=${-2.0*pi}  joint1_upper_limit:=${2.0*pi}
     joint2_lower_limit:=${-2.3038346}  joint2_upper_limit:=${2.3038346}
     joint3_lower_limit:=${-4.2236968}  joint3_upper_limit:=${0.061087}
@@ -26,6 +38,42 @@
           <param name="robot_type">uf850</param>
           <param name="add_gripper">${add_gripper}</param>
           <param name="add_bio_gripper">${add_bio_gripper}</param>
+          <!-- Onboard force control. ft_sensor_mode: 0 off (wrench still readable),
+               1 admittance, 2 force control. ft_coord: 0 base frame, 1 tool frame.
+               Vectors are 6 space separated values, ordered x y z rx ry rz. -->
+          <param name="ft_sensor_mode">${ft_sensor_mode}</param>
+          <param name="ft_coord">${ft_coord}</param>
+          <param name="ft_c_axis">${ft_c_axis}</param>
+          <param name="ft_f_ref">${ft_f_ref}</param>
+          <param name="ft_limits">${ft_limits}</param>
+          <param name="ft_kp">${ft_kp}</param>
+          <param name="ft_ki">${ft_ki}</param>
+          <param name="ft_kd">${ft_kd}</param>
+          <param name="ft_xe_limit">${ft_xe_limit}</param>
+          <param name="ft_zero_on_activate">${ft_zero_on_activate}</param>
+          <!-- Homing runs on activation, before the force loop is armed.
+               home_pose is x y z in mm then roll pitch yaw in deg; home_joints is
+               joint angles in deg and is only used when home_pose is empty. -->
+          <param name="home_on_activate">${home_on_activate}</param>
+          <!-- Emitted only when set: an empty <param> makes the ros2_control URDF
+               parser warn "text not specified in the ... tag". -->
+          <xacro:unless value="${home_pose == ''}">
+            <param name="home_pose">${home_pose}</param>
+          </xacro:unless>
+          <xacro:unless value="${home_joints == ''}">
+            <param name="home_joints">${home_joints}</param>
+          </xacro:unless>
+          <param name="home_speed">${home_speed}</param>
+          <param name="home_acc">${home_acc}</param>
+          <param name="home_joint_speed">${home_joint_speed}</param>
+          <param name="home_joint_acc">${home_joint_acc}</param>
+          <!-- set_position() parameters used by write(). tcp_radius < 0 disables
+               blending. cmd_queue_max caps how deep the controller command cache may
+               get before write() skips a cycle. -->
+          <param name="tcp_speed">${tcp_speed}</param>
+          <param name="tcp_acc">${tcp_acc}</param>
+          <param name="tcp_radius">${tcp_radius}</param>
+          <param name="cmd_queue_max">${cmd_queue_max}</param>
         </xacro:if>
         <!-- fake -->
         <!-- <plugin>fake_components/GenericSystem</plugin> -->
@@ -37,83 +85,63 @@
         <!-- <plugin>uf_robot_hardware/UFRobotSystemHardware</plugin> -->
       </hardware>
       <joint name="${prefix}joint1">
-        <command_interface name="position">
-          <param name="min">${joint1_lower_limit}</param>
-          <param name="max">${joint1_upper_limit}</param>
-        </command_interface>
-        <command_interface name="velocity">
-          <param name="min">-3.14</param>
-          <param name="max">3.14</param>
-        </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint2">
-        <command_interface name="position">
-          <param name="min">${joint2_lower_limit}</param>
-          <param name="max">${joint2_upper_limit}</param>
-        </command_interface>
-        <command_interface name="velocity">
-          <param name="min">-3.14</param>
-          <param name="max">3.14</param>
-        </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint3">
-        <command_interface name="position">
-          <param name="min">${joint3_lower_limit}</param>
-          <param name="max">${joint3_upper_limit}</param>
-        </command_interface>
-        <command_interface name="velocity">
-          <param name="min">-3.14</param>
-          <param name="max">3.14</param>
-        </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint4">
-        <command_interface name="position">
-          <param name="min">${joint4_lower_limit}</param>
-          <param name="max">${joint4_upper_limit}</param>
-        </command_interface>
-        <command_interface name="velocity">
-          <param name="min">-3.14</param>
-          <param name="max">3.14</param>
-        </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint5">
-        <command_interface name="position">
-          <param name="min">${joint5_lower_limit}</param>
-          <param name="max">${joint5_upper_limit}</param>
-        </command_interface>
-        <command_interface name="velocity">
-          <param name="min">-3.14</param>
-          <param name="max">3.14</param>
-        </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint6">
-        <command_interface name="position">
-          <param name="min">${joint6_lower_limit}</param>
-          <param name="max">${joint6_upper_limit}</param>
-        </command_interface>
-        <command_interface name="velocity">
-          <param name="min">-3.14</param>
-          <param name="max">3.14</param>
-        </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
         <!-- <state_interface name="effort"/> -->
       </joint>
+      <!-- Cartesian TCP command and state, SI units (m, rad). The arm runs in
+           XARM_MODE::POSE for its whole lifetime, so motion is commanded with
+           set_position() through these interfaces rather than per joint. -->
+      <gpio name="${prefix}tcp">
+        <command_interface name="x"/>
+        <command_interface name="y"/>
+        <command_interface name="z"/>
+        <command_interface name="roll"/>
+        <command_interface name="pitch"/>
+        <command_interface name="yaw"/>
+        <state_interface name="x"/>
+        <state_interface name="y"/>
+        <state_interface name="z"/>
+        <state_interface name="roll"/>
+        <state_interface name="pitch"/>
+        <state_interface name="yaw"/>
+      </gpio>
+      <!-- End effector wrench, N and Nm. These interface names are what
+           semantic_components::ForceTorqueSensor expects, so
+           force_torque_sensor_broadcaster can claim them directly. -->
+      <sensor name="${prefix}ft_sensor">
+        <state_interface name="force.x"/>
+        <state_interface name="force.y"/>
+        <state_interface name="force.z"/>
+        <state_interface name="torque.x"/>
+        <state_interface name="torque.y"/>
+        <state_interface name="torque.z"/>
+      </sensor>
     </ros2_control>
   </xacro:macro>
 </robot>

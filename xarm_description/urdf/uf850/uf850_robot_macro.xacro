@@ -10,6 +10,27 @@
     ros2_control_plugin:='uf_robot_hardware/UFRobotSystemHardware' 
     robot_ip:=''
     report_type:='normal'
+    ft_sensor_mode:='2'
+    ft_coord:='1'
+    ft_c_axis:='0 0 1 0 1 0'
+    ft_f_ref:='0 0 8 0 8 0'
+    ft_limits:='0 0 0 0 0 0'
+    ft_kp:='0.005 0.005 0.005 0.005 0.005 0.005'
+    ft_ki:='0.00005 0.00005 0.00005 0.00005 0.00005 0.00005'
+    ft_kd:='0.05 0.05 0.05 0.05 0.05 0.05'
+    ft_xe_limit:='200 200 200 0.1 0.1 0.1'
+    ft_zero_on_activate:='true'
+    home_on_activate:='true'
+    home_pose:=''
+    home_joints:=''
+    home_speed:='100'
+    home_acc:='1000'
+    home_joint_speed:='20'
+    home_joint_acc:='200'
+    tcp_speed:='200'
+    tcp_acc:='2000'
+    tcp_radius:='-1'
+    cmd_queue_max:='16'
     baud_checkset:='true'
     default_gripper_baud:=2000000 
     model_num:=0
@@ -33,6 +54,27 @@
           ros2_control_plugin="${ros2_control_plugin}"
           hw_ns="${hw_ns}" add_gripper="${add_gripper}" add_bio_gripper="${add_bio_gripper}"
           robot_ip="${robot_ip}" report_type="${report_type}"
+          ft_sensor_mode="${ft_sensor_mode}"
+          ft_coord="${ft_coord}"
+          ft_c_axis="${ft_c_axis}"
+          ft_f_ref="${ft_f_ref}"
+          ft_limits="${ft_limits}"
+          ft_kp="${ft_kp}"
+          ft_ki="${ft_ki}"
+          ft_kd="${ft_kd}"
+          ft_xe_limit="${ft_xe_limit}"
+          ft_zero_on_activate="${ft_zero_on_activate}"
+          home_on_activate="${home_on_activate}"
+          home_pose="${home_pose}"
+          home_joints="${home_joints}"
+          home_speed="${home_speed}"
+          home_acc="${home_acc}"
+          home_joint_speed="${home_joint_speed}"
+          home_joint_acc="${home_joint_acc}"
+          tcp_speed="${tcp_speed}"
+          tcp_acc="${tcp_acc}"
+          tcp_radius="${tcp_radius}"
+          cmd_queue_max="${cmd_queue_max}"
           baud_checkset="${baud_checkset}" default_gripper_baud="${default_gripper_baud}"
           joint1_lower_limit="${-pi*0.99}" joint1_upper_limit="${pi*0.99}"
           joint2_lower_limit="${-2.3038346}" joint2_upper_limit="${2.3038346}"
@@ -58,6 +100,27 @@
           ros2_control_plugin="${ros2_control_plugin}"
           hw_ns="${hw_ns}" add_gripper="${add_gripper}" add_bio_gripper="${add_bio_gripper}"
           robot_ip="${robot_ip}" report_type="${report_type}"
+          ft_sensor_mode="${ft_sensor_mode}"
+          ft_coord="${ft_coord}"
+          ft_c_axis="${ft_c_axis}"
+          ft_f_ref="${ft_f_ref}"
+          ft_limits="${ft_limits}"
+          ft_kp="${ft_kp}"
+          ft_ki="${ft_ki}"
+          ft_kd="${ft_kd}"
+          ft_xe_limit="${ft_xe_limit}"
+          ft_zero_on_activate="${ft_zero_on_activate}"
+          home_on_activate="${home_on_activate}"
+          home_pose="${home_pose}"
+          home_joints="${home_joints}"
+          home_speed="${home_speed}"
+          home_acc="${home_acc}"
+          home_joint_speed="${home_joint_speed}"
+          home_joint_acc="${home_joint_acc}"
+          tcp_speed="${tcp_speed}"
+          tcp_acc="${tcp_acc}"
+          tcp_radius="${tcp_radius}"
+          cmd_queue_max="${cmd_queue_max}"
           baud_checkset="${baud_checkset}" default_gripper_baud="${default_gripper_baud}" />
       </xacro:if>
       <xacro:uf850_urdf prefix="${prefix}" model_num="${model_num}"
