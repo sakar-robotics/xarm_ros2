@@ -16,6 +16,29 @@
   <xacro:arg name="robot_sn" default=""/>
   <xacro:arg name="report_type" default="normal"/>
 
+  <!-- uf850 force control / homing / Cartesian write params -->
+  <xacro:arg name="ft_sensor_mode" default="2"/>
+  <xacro:arg name="ft_coord" default="1"/>
+  <xacro:arg name="ft_c_axis" default="0 0 1 0 1 0"/>
+  <xacro:arg name="ft_f_ref" default="0 0 8 0 8 0"/>
+  <xacro:arg name="ft_limits" default="0 0 0 0 0 0"/>
+  <xacro:arg name="ft_kp" default="0.005 0.005 0.005 0.005 0.005 0.005"/>
+  <xacro:arg name="ft_ki" default="0.00005 0.00005 0.00005 0.00005 0.00005 0.00005"/>
+  <xacro:arg name="ft_kd" default="0.05 0.05 0.05 0.05 0.05 0.05"/>
+  <xacro:arg name="ft_xe_limit" default="200 200 200 0.1 0.1 0.1"/>
+  <xacro:arg name="ft_zero_on_activate" default="true"/>
+  <xacro:arg name="home_on_activate" default="true"/>
+  <xacro:arg name="home_pose" default=""/>
+  <xacro:arg name="home_joints" default=""/>
+  <xacro:arg name="home_speed" default="100"/>
+  <xacro:arg name="home_acc" default="1000"/>
+  <xacro:arg name="home_joint_speed" default="20"/>
+  <xacro:arg name="home_joint_acc" default="200"/>
+  <xacro:arg name="tcp_speed" default="200"/>
+  <xacro:arg name="tcp_acc" default="2000"/>
+  <xacro:arg name="tcp_radius" default="-1"/>
+  <xacro:arg name="cmd_queue_max" default="16"/>
+
   <xacro:arg name="ros2_control_plugin" default="uf_robot_hardware/UFRobotSystemHardware"/>
   <xacro:arg name="ros2_control_params" default=""/>
 
@@ -65,6 +88,27 @@
     geometry_mesh_origin_xyz="$(arg geometry_mesh_origin_xyz)" geometry_mesh_origin_rpy="$(arg geometry_mesh_origin_rpy)"
     geometry_mesh_tcp_xyz="$(arg geometry_mesh_tcp_xyz)" geometry_mesh_tcp_rpy="$(arg geometry_mesh_tcp_rpy)"
     robot_ip="$(arg robot_ip)" report_type="$(arg report_type)"
+    ft_sensor_mode="$(arg ft_sensor_mode)"
+    ft_coord="$(arg ft_coord)"
+    ft_c_axis="$(arg ft_c_axis)"
+    ft_f_ref="$(arg ft_f_ref)"
+    ft_limits="$(arg ft_limits)"
+    ft_kp="$(arg ft_kp)"
+    ft_ki="$(arg ft_ki)"
+    ft_kd="$(arg ft_kd)"
+    ft_xe_limit="$(arg ft_xe_limit)"
+    ft_zero_on_activate="$(arg ft_zero_on_activate)"
+    home_on_activate="$(arg home_on_activate)"
+    home_pose="$(arg home_pose)"
+    home_joints="$(arg home_joints)"
+    home_speed="$(arg home_speed)"
+    home_acc="$(arg home_acc)"
+    home_joint_speed="$(arg home_joint_speed)"
+    home_joint_acc="$(arg home_joint_acc)"
+    tcp_speed="$(arg tcp_speed)"
+    tcp_acc="$(arg tcp_acc)"
+    tcp_radius="$(arg tcp_radius)"
+    cmd_queue_max="$(arg cmd_queue_max)"
     baud_checkset="$(arg baud_checkset)" default_gripper_baud="$(arg default_gripper_baud)"
     model1300="$(arg model1300)" attach_to="$(arg attach_to)" attach_xyz="$(arg attach_xyz)" attach_rpy="$(arg attach_rpy)"
     robot_sn="$(arg robot_sn)" use_gazebo_camera="$(arg use_gazebo_camera)" mesh_suffix="$(arg mesh_suffix)" kinematics_suffix="$(arg kinematics_suffix)"
