@@ -14,7 +14,7 @@ endif()
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic
     -Wno-sign-compare
-    -Wno-unused-parameter 
+    -Wno-unused-parameter
   )
 endif()
 
@@ -80,7 +80,7 @@ ament_target_dependencies(
 # message(WARNING "xarm_sdk_LIBRARIES: ${xarm_sdk_LIBRARIES}")
 # message(WARNING "xarm_api_LIBRARIES: ${xarm_api_LIBRARIES}")
 
-target_link_libraries(uf_robot_hardware 
+target_link_libraries(uf_robot_hardware
   ${xarm_api_LIBRARIES}
   ${ament_LIBRARIES}
 )

@@ -56,13 +56,6 @@ tcp_pose_controller:
           - "pitch"
           - "yaw"
 
-# Runtime force control. Kept as its own controller rather than a second group on
-# tcp_pose_controller so that a pose command can never disturb the force loop, and so
-# arming it is one self contained message on its own topic.
-#
-#   ros2 topic pub --once /ft_control_controller/commands \
-#     control_msgs/msg/DynamicInterfaceGroupValues '{interface_groups: ["ft"],
-#     interface_values: [{interface_names: ["enable"], values: [1.0]}]}'
 ft_control_controller:
   ros__parameters:
     gpios:
