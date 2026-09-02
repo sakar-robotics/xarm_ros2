@@ -18,6 +18,9 @@ controller_manager:
     tcp_pose_controller:
       type: gpio_controllers/GpioCommandController
 
+    ft_control_controller:
+      type: gpio_controllers/GpioCommandController
+
 # Publishes geometry_msgs/WrenchStamped on ~/wrench from the ft_sensor state interfaces.
 uf_ft_sensor_broadcaster:
   ros__parameters:
@@ -52,3 +55,34 @@ tcp_pose_controller:
           - "roll"
           - "pitch"
           - "yaw"
+
+ft_control_controller:
+  ros__parameters:
+    gpios:
+      - ft
+    command_interfaces:
+      ft:
+        interfaces:
+          - "enable"
+          - "coord"
+          - "c_axis_0"
+          - "c_axis_1"
+          - "c_axis_2"
+          - "c_axis_3"
+          - "c_axis_4"
+          - "c_axis_5"
+          - "f_ref_0"
+          - "f_ref_1"
+          - "f_ref_2"
+          - "f_ref_3"
+          - "f_ref_4"
+          - "f_ref_5"
+    state_interfaces:
+      ft:
+        interfaces:
+          - "enable"
+          - "mode"
+          - "error"
+          - "force_x"
+          - "force_y"
+          - "force_z"

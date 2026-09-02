@@ -33,6 +33,34 @@ namespace uf_robot_hardware
         "force.x", "force.y", "force.z", "torque.x", "torque.y", "torque.z"
     };
 
+    // Runtime force control interfaces. Vectors are flattened one interface per
+    // element because ros2_control command interfaces are scalar doubles.
+    enum { FT_CMD_ENABLE = 0, FT_CMD_COORD = 1, FT_CMD_C_AXIS = 2, FT_CMD_F_REF = 8, FT_CMD_COUNT = 14 };
+    static const char *FT_CMD_NAMES[FT_CMD_COUNT] = {
+        "enable", "coord",
+        "c_axis_0", "c_axis_1", "c_axis_2", "c_axis_3", "c_axis_4", "c_axis_5",
+        "f_ref_0", "f_ref_1", "f_ref_2", "f_ref_3", "f_ref_4", "f_ref_5"
+    };
+    enum { FT_CFG_ARMED = 0, FT_CFG_MODE = 1, FT_CFG_ERROR = 2,
+           FT_CFG_FORCE = 3, FT_CFG_COUNT = 6 };
+    static const char *FT_CFG_STATE_NAMES[FT_CFG_COUNT] = {
+        // enable is what we asked for, mode is what the controller confirms. They only
+        // disagree if a mode change was rejected, in which case believe mode.
+        "enable", "mode", "error",
+        // Measured end effector force, N. Mirrors the first three ft_sensor state
+        // interfaces so the loop's target and what it is actually feeling can be read
+        // from one topic. The full wrench, torques included, is on the broadcaster.
+        "force_x", "force_y", "force_z"
+    };
+
+    static int _index_of_n(const char * const *names, int n, const std::string& name)
+    {
+        for (int i = 0; i < n; i++) {
+            if (name == names[i]) return i;
+        }
+        return -1;
+    }
+
     static int _index_of(const char *names[6], const std::string& name)
     {
         for (int i = 0; i < 6; i++) {
@@ -59,8 +87,11 @@ namespace uf_robot_hardware
         // wants (mm and radians, since XArmAPI is built with is_radian=true).
         // Defaults are the values validated on the real UF850: 8 N along tool Z with
         // 8 Nm about tool Y, tool frame, sensor zeroed at activation.
-        ft_sensor_mode_ = 2;
-        ft_coord_ = 1;
+        // The force loop is off at launch: arming it is an explicit act, through the ft
+        // gpio command interfaces or ft_sensor_mode:=2. The setpoints below are the
+        // values validated on the real UF850, ready for whenever it is armed.
+        ft_sensor_mode_ = 0;
+        ft_coord_ = 0;
         ft_zero_on_activate_ = true;
         home_on_activate_ = true;
         has_home_pose_ = false;
@@ -85,10 +116,9 @@ namespace uf_robot_hardware
             ft_kd_[i] = 0.05;
             ft_xe_limit_[i] = (i < 3) ? 200.0 : 0.1;
         }
-        ft_c_axis_[2] = 1;
+        ft_c_axis_[0] = 1;
         ft_c_axis_[4] = 1;
-        ft_f_ref_[2] = 8.0;
-        ft_f_ref_[4] = 8.0;
+        ft_f_ref_[0] = 8.0;
 
         auto str_param = [this](const std::string& name, std::string& out) -> bool {
             auto it = info_.hardware_parameters.find(name);
@@ -363,6 +393,9 @@ namespace uf_robot_hardware
         tcp_cmds_.resize(6, std::numeric_limits<double>::quiet_NaN());
         prev_tcp_cmds_.resize(6, std::numeric_limits<double>::quiet_NaN());
         ft_states_.resize(6, 0.0);
+        ft_cmds_.resize(FT_CMD_COUNT, std::numeric_limits<double>::quiet_NaN());
+        ft_cfg_states_.resize(FT_CFG_COUNT, 0.0);
+        ft_armed_ = false;
         memset(tcp_standoff_, 0, sizeof(tcp_standoff_));
 
         // Joints are state only. The arm stays in XARM_MODE::POSE and is commanded
@@ -393,6 +426,27 @@ namespace uf_robot_hardware
                 RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s', expected one of x y z roll pitch yaw",
                     robot_ip_.c_str(), info_.gpios[0].name.c_str(), iface.name.c_str());
                 return CallbackReturn::ERROR;
+            }
+        }
+
+        // The ft gpio component is optional: without it the force loop is still
+        // configurable from the launch params, just not at runtime.
+        has_ft_gpio_ = info_.gpios.size() > 1;
+        ft_iface_prefix_ = has_ft_gpio_ ? info_.gpios[1].name + "/" : std::string();
+        if (has_ft_gpio_) {
+            for (const auto & iface : info_.gpios[1].command_interfaces) {
+                if (_index_of_n(FT_CMD_NAMES, FT_CMD_COUNT, iface.name) < 0) {
+                    RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s'",
+                        robot_ip_.c_str(), info_.gpios[1].name.c_str(), iface.name.c_str());
+                    return CallbackReturn::ERROR;
+                }
+            }
+            for (const auto & iface : info_.gpios[1].state_interfaces) {
+                if (_index_of_n(FT_CFG_STATE_NAMES, FT_CFG_COUNT, iface.name) < 0) {
+                    RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected state interface '%s'",
+                        robot_ip_.c_str(), info_.gpios[1].name.c_str(), iface.name.c_str());
+                    return CallbackReturn::ERROR;
+                }
             }
         }
 
@@ -432,6 +486,15 @@ namespace uf_robot_hardware
                 info_.gpios[0].name, iface.name, &tcp_states_[idx]));
         }
 
+        if (has_ft_gpio_) {
+            for (const auto & iface : info_.gpios[1].state_interfaces) {
+                int idx = _index_of_n(FT_CFG_STATE_NAMES, FT_CFG_COUNT, iface.name);
+                if (idx < 0) continue;
+                state_interfaces.emplace_back(hardware_interface::StateInterface(
+                    info_.gpios[1].name, iface.name, &ft_cfg_states_[idx]));
+            }
+        }
+
         // End effector wrench, N and Nm. The names force.x .. torque.z are what
         // semantic_components::ForceTorqueSensor expects, so
         // force_torque_sensor_broadcaster can claim them directly.
@@ -458,7 +521,171 @@ namespace uf_robot_hardware
                 info_.gpios[0].name, iface.name, &tcp_cmds_[idx]));
         }
 
+        if (has_ft_gpio_) {
+            for (const auto & iface : info_.gpios[1].command_interfaces) {
+                int idx = _index_of_n(FT_CMD_NAMES, FT_CMD_COUNT, iface.name);
+                if (idx < 0) continue;
+                command_interfaces.emplace_back(hardware_interface::CommandInterface(
+                    info_.gpios[1].name, iface.name, &ft_cmds_[idx]));
+            }
+        }
+
         return command_interfaces;
+    }
+
+    void UFRobotSystemHardware::_refresh_ft_cfg_states(void)
+    {
+        int ft_mode = -1, ft_is_started = -1, ft_err = -1;
+        xarm_driver_.arm->get_ft_sensor_config(&ft_mode, &ft_is_started);
+        xarm_driver_.arm->get_ft_sensor_error(&ft_err);
+        ft_cfg_states_[FT_CFG_ARMED] = ft_armed_ ? 1.0 : 0.0;
+        ft_cfg_states_[FT_CFG_MODE] = ft_mode;
+        ft_cfg_states_[FT_CFG_ERROR] = ft_err;
+        // FT_CFG_FORCE.. are refreshed every read(), leave them alone here.
+    }
+
+    bool UFRobotSystemHardware::_arm_ft(bool on)
+    {
+        if (on) {
+            // Refuse a target the loop cannot chase. Without this the arm sits with the
+            // app started and nothing to seek, which reads as a silent failure.
+            bool has_f_ref = false;
+            for (int i = 0; i < 6; i++) {
+                if (ft_c_axis_[i] && ft_f_ref_[i] != 0.0) has_f_ref = true;
+            }
+            if (!has_f_ref) {
+                RCLCPP_ERROR(LOGGER, "[%s] Refusing to arm force control: f_ref is zero on every compliant axis",
+                    robot_ip_.c_str());
+                return false;
+            }
+            // Anchor the standoff where the arm is now, so the force offset is applied
+            // on top of the present pose rather than one seeded at activation.
+            for (int i = 0; i < 6; i++) tcp_standoff_[i] = tcp_states_[i];
+
+            // set_ft_sensor_mode(0) tears the force app down, taking its configuration
+            // with it, so asking for mode 2 again on its own is rejected. Re-run the
+            // setup the SDK examples do before entering force mode: sensor enabled,
+            // then the force parameters, then the mode. The zero is deliberately not
+            // repeated here, it is only valid off contact and would corrupt the
+            // calibration if the tool is touching something.
+            xarm_driver_.arm->set_ft_sensor_enable(1);
+            int cfg_ret = xarm_driver_.arm->set_ft_sensor_force_parameters(
+                ft_coord_, ft_c_axis_, ft_f_ref_, ft_limits_,
+                ft_kp_, ft_ki_, ft_kd_, ft_xe_limit_);
+            if (cfg_ret != 0) {
+                RCLCPP_ERROR_THROTTLE(LOGGER, *node_->get_clock(), 2000,
+                    "[%s] set_ft_sensor_force_parameters before arming, ret=%d",
+                    robot_ip_.c_str(), cfg_ret);
+                return false;
+            }
+        }
+
+        int mode = on ? 2 : 0;
+        int ret = xarm_driver_.arm->set_ft_sensor_mode(mode);
+        // The force loop starts, and stops, on this state transition.
+        xarm_driver_.arm->set_state(XARM_STATE::START);
+        _refresh_ft_cfg_states();
+
+        // set_ft_sensor_mode goes through _check_code with is_move_cmd false, which
+        // returns 0 even on controller error, so trust the readback rather than ret.
+        // ft_armed_ is left untouched on failure so _apply_ft_commands() retries, which
+        // matters most in the disarm direction.
+        if (ret != 0 || (int)ft_cfg_states_[FT_CFG_MODE] != mode) {
+            RCLCPP_ERROR_THROTTLE(LOGGER, *node_->get_clock(), 2000,
+                "[%s] Force control failed to reach mode %d: ret=%d, controller reports mode %d",
+                robot_ip_.c_str(), mode, ret, (int)ft_cfg_states_[FT_CFG_MODE]);
+            return false;
+        }
+
+        ft_armed_ = on;
+        ft_sensor_mode_ = mode;
+        ft_cfg_states_[FT_CFG_ARMED] = on ? 1.0 : 0.0;
+        RCLCPP_INFO(LOGGER, "[%s] Force control %s (mode=%d, error=%d)",
+            robot_ip_.c_str(), on ? "ARMED" : "DISARMED",
+            (int)ft_cfg_states_[FT_CFG_MODE], (int)ft_cfg_states_[FT_CFG_ERROR]);
+        return true;
+    }
+
+    void UFRobotSystemHardware::_apply_ft_commands(void)
+    {
+        if (!has_ft_gpio_) return;
+        // GpioCommandController leaves the buffer alone until it receives a message, so
+        // NaN means nothing has been commanded and the launch params still stand.
+        for (int i = 0; i < FT_CMD_COUNT; i++) {
+            if (std::isnan(ft_cmds_[i])) return;
+        }
+
+        bool want_armed = ft_cmds_[FT_CMD_ENABLE] >= 0.5;
+        int want_coord = ft_cmds_[FT_CMD_COORD] >= 0.5 ? 1 : 0;
+        int want_c_axis[6];
+        float want_f_ref[6];
+        for (int i = 0; i < 6; i++) {
+            want_c_axis[i] = ft_cmds_[FT_CMD_C_AXIS + i] >= 0.5 ? 1 : 0;
+            want_f_ref[i] = (float)ft_cmds_[FT_CMD_F_REF + i];
+        }
+
+        // An all zero c_axis is not a meaningful configuration, so treat it as a buffer
+        // that was zeroed rather than commanded and leave the current setup alone.
+        bool any_axis = false;
+        for (int i = 0; i < 6; i++) {
+            if (want_c_axis[i]) any_axis = true;
+        }
+        if (!any_axis) return;
+
+        bool cfg_changed = want_coord != ft_coord_;
+        for (int i = 0; i < 6; i++) {
+            if (want_c_axis[i] != ft_c_axis_[i] || want_f_ref[i] != ft_f_ref_[i]) cfg_changed = true;
+        }
+        bool want_changed = want_armed != prev_want_armed_;
+        prev_want_armed_ = want_armed;
+        if (!cfg_changed && want_armed == ft_armed_) return;
+
+        if (cfg_changed) {
+            ft_coord_ = want_coord;
+            for (int i = 0; i < 6; i++) {
+                ft_c_axis_[i] = want_c_axis[i];
+                ft_f_ref_[i] = want_f_ref[i];
+            }
+            RCLCPP_INFO(LOGGER, "[%s] Force config: coord=%s, c_axis=[%d %d %d %d %d %d],"
+                " f_ref=[%.2f %.2f %.2f %.2f %.2f %.2f]",
+                robot_ip_.c_str(), ft_coord_ == 0 ? "base" : "tool",
+                ft_c_axis_[0], ft_c_axis_[1], ft_c_axis_[2], ft_c_axis_[3], ft_c_axis_[4], ft_c_axis_[5],
+                ft_f_ref_[0], ft_f_ref_[1], ft_f_ref_[2], ft_f_ref_[3], ft_f_ref_[4], ft_f_ref_[5]);
+        }
+
+        // Everything below does blocking TCP round trips, and a rejected request stays
+        // pending because ft_armed_ is only committed on success. Act immediately on a
+        // fresh request, then retry at 1 Hz rather than every cycle.
+        curr_write_time_ = node_->get_clock()->now();
+        if (!want_changed && !cfg_changed
+            && curr_write_time_.seconds() - prev_ft_retry_time_.seconds() <= 1.0) {
+            return;
+        }
+        prev_ft_retry_time_ = curr_write_time_;
+
+        if (cfg_changed && ft_armed_ && want_armed) {
+            // The force app latches its configuration when it starts, so editing c_axis,
+            // f_ref or coord while it runs has no effect. Cycle it through mode 0 to pick
+            // the new parameters up; _arm_ft(true) rewrites them on the way back in.
+            // The loop releases for a few milliseconds in between.
+            RCLCPP_INFO(LOGGER, "[%s] Restarting force loop to apply the new configuration",
+                robot_ip_.c_str());
+            if (_arm_ft(false)) _arm_ft(true);
+        }
+        else if (want_armed != ft_armed_) {
+            _arm_ft(want_armed);
+        }
+        else if (cfg_changed) {
+            // Disarmed: stage the parameters so the next arm starts from them.
+            int ret = xarm_driver_.arm->set_ft_sensor_force_parameters(
+                ft_coord_, ft_c_axis_, ft_f_ref_, ft_limits_,
+                ft_kp_, ft_ki_, ft_kd_, ft_xe_limit_);
+            if (ret != 0) {
+                RCLCPP_ERROR(LOGGER, "[%s] set_ft_sensor_force_parameters, ret=%d",
+                    robot_ip_.c_str(), ret);
+            }
+            _refresh_ft_cfg_states();
+        }
     }
 
     int UFRobotSystemHardware::_go_home(void)
@@ -698,15 +925,40 @@ namespace uf_robot_hardware
             }
         }
         else {
-            // Force control off, but still enable sensor communication so the wrench
-            // is readable.
+            // Force control off at activation. Still enable sensor communication so the
+            // wrench publishes, zero it if asked (only valid off contact, and activation
+            // right after homing is the one moment that is known), and push the force
+            // params so arming later through the ft gpio has them ready.
             int ret = xarm_driver_.arm->set_ft_sensor_enable(1);
+            if (ft_zero_on_activate_) {
+                xarm_driver_.arm->set_ft_sensor_zero();
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+            xarm_driver_.arm->set_ft_sensor_force_parameters(
+                ft_coord_, ft_c_axis_, ft_f_ref_, ft_limits_,
+                ft_kp_, ft_ki_, ft_kd_, ft_xe_limit_);
             RCLCPP_INFO(LOGGER, "[%s] Force control not armed, sensor enabled read only, ret=%d",
                 robot_ip_.c_str(), ret);
         }
 
+        ft_armed_ = ft_sensor_mode_ != 0;
+        prev_want_armed_ = ft_armed_;
+        // Seed the runtime buffer from the launch params, so the ft gpio reflects the
+        // active configuration before anything is published to it and the first
+        // _apply_ft_commands() sees no change.
+        if (has_ft_gpio_) {
+            ft_cmds_[FT_CMD_ENABLE] = ft_armed_ ? 1.0 : 0.0;
+            ft_cmds_[FT_CMD_COORD] = ft_coord_;
+            for (int i = 0; i < 6; i++) {
+                ft_cmds_[FT_CMD_C_AXIS + i] = ft_c_axis_[i];
+                ft_cmds_[FT_CMD_F_REF + i] = ft_f_ref_[i];
+            }
+        }
+        _refresh_ft_cfg_states();
+
         prev_write_time_ = node_->get_clock()->now();
         prev_rearm_time_ = prev_write_time_;
+        prev_ft_retry_time_ = prev_write_time_;
 
         RCLCPP_INFO(LOGGER, "[%s] System Sucessfully started!", robot_ip_.c_str());
         return CallbackReturn::SUCCESS;
@@ -747,6 +999,9 @@ namespace uf_robot_hardware
                 ? xarm_driver_.arm->position[i] / 1000.0
                 : xarm_driver_.arm->position[i];
         }
+        for (int i = 0; i < 3; i++) {
+            ft_cfg_states_[FT_CFG_FORCE + i] = ft_states_[i];
+        }
         // double time_sec = joint_state_msg_->header.stamp.seconds() - start.seconds();
         // read_total_time_ += time_sec;
         // if (time_sec > read_max_time_) {
@@ -786,6 +1041,16 @@ namespace uf_robot_hardware
 
     hardware_interface::return_type UFRobotSystemHardware::write(const rclcpp::Time & time, const rclcpp::Duration &period)
     {
+        // Ahead of every early return below. Disarming the force loop is the stop
+        // button, so it must reach the arm even when the arm is not ready, is paused, or
+        // has a full command queue. This issues no motion, and it is a no-op unless the
+        // ft gpio actually changed.
+        _apply_ft_commands();
+
+        if (_handle_config_changed()) {
+            return hardware_interface::return_type::OK;
+        }
+
         if (_need_reset()) {
             initialized_ = false;
             _deactivate_controller();
@@ -813,7 +1078,7 @@ namespace uf_robot_hardware
         // commanded pose, so a compliant axis has to be held at a fixed standoff.
         // Tracking the measured pose there would make the command chase the force
         // loop's own output and the arm would walk.
-        if (ft_sensor_mode_ != 0) {
+        if (ft_armed_) {
             for (int i = 0; i < 6; i++) {
                 if (ft_c_axis_[i]) tcp_cmds_[i] = tcp_standoff_[i];
             }
@@ -841,6 +1106,34 @@ namespace uf_robot_hardware
         return hardware_interface::return_type::OK;
     }
 
+    bool UFRobotSystemHardware::_is_ft_controller(const controller_manager_msgs::msg::ControllerState& c)
+    {
+        // claimed_interfaces is empty while a controller is inactive, so decide on what
+        // it requires rather than on what it currently holds.
+        if (!has_ft_gpio_ || c.required_command_interfaces.empty()) return false;
+        for (const auto & iface : c.required_command_interfaces) {
+            if (iface.rfind(ft_iface_prefix_, 0) != 0) return false;
+        }
+        return true;
+    }
+
+    bool UFRobotSystemHardware::_handle_config_changed(void)
+    {
+        // Every force config change leaves the arm in state 5 (CONFIG_CHANGED), so this
+        // is self inflicted and self healing. Re-arm and skip the cycle, but do not let
+        // it reach _need_reset(): tearing the controllers down would take the ft command
+        // interfaces with it, and then nothing could disarm the force loop.
+        if (xarm_driver_.curr_state != 5) return false;
+        curr_write_time_ = node_->get_clock()->now();
+        if (curr_write_time_.seconds() - prev_rearm_time_.seconds() > 1.0) {
+            prev_rearm_time_ = curr_write_time_;
+            int ret = xarm_driver_.arm->set_state(XARM_STATE::START);
+            RCLCPP_INFO(LOGGER, "[%s] State 5 (CONFIG_CHANGED), re-arming with set_state(START), ret=%d",
+                robot_ip_.c_str(), ret);
+        }
+        return true;
+    }
+
     void UFRobotSystemHardware::_deactivate_controller(void) {
         if(reactivate_controller_later_)
             return;
@@ -849,15 +1142,17 @@ namespace uf_robot_hardware
         bool valid_operation = false;
         if (ret == 0 && res_list_controller_->controller.size() > 0) {
             req_switch_controller_->activate_controllers.resize(0);
-            req_switch_controller_->deactivate_controllers.resize(res_list_controller_->controller.size());
+            req_switch_controller_->deactivate_controllers.clear();
             for (uint i = 0; i < res_list_controller_->controller.size(); i++) {
-                // RCLCPP_ERROR(LOGGER, "STATE: %s", res_list_controller_->controller[i].state.c_str());
+                // The force control controller commands no motion, and it is the only way
+                // to disarm the force loop. Leave it running: it is needed most exactly
+                // when the arm is in the state that got us here.
+                if (_is_ft_controller(res_list_controller_->controller[i])) continue;
                 if(res_list_controller_->controller[i].state == std::string("active")){
                 // for situation of initial launch with emg stop pressed, launch file will activate controller and it takes a while
                     valid_operation = true;
                 }
-                // req_switch_controller_->activate_controllers[i] = res_list_controller_->controller[i].name;
-                req_switch_controller_->deactivate_controllers[i] = res_list_controller_->controller[i].name;
+                req_switch_controller_->deactivate_controllers.push_back(res_list_controller_->controller[i].name);
             }
             req_switch_controller_->strictness = controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT;
             req_switch_controller_->timeout = rclcpp::Duration::from_seconds(2.0);
@@ -874,10 +1169,11 @@ namespace uf_robot_hardware
         int ret = _call_request(client_list_controller_, req_list_controller_, res_list_controller_);
         if (ret == 0 && res_list_controller_->controller.size() > 0) {
             req_switch_controller_->deactivate_controllers.resize(0);
-            req_switch_controller_->activate_controllers.resize(res_list_controller_->controller.size());
+            req_switch_controller_->activate_controllers.clear();
             for (uint i = 0; i < res_list_controller_->controller.size(); i++) {
-                req_switch_controller_->activate_controllers[i] = res_list_controller_->controller[i].name;
-                // req_switch_controller_->deactivate_controllers[i] = res_list_controller_->controller[i].name;
+                // Never deactivated above, so never needs reactivating here.
+                if (_is_ft_controller(res_list_controller_->controller[i])) continue;
+                req_switch_controller_->activate_controllers.push_back(res_list_controller_->controller[i].name);
             }
             req_switch_controller_->strictness = controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT;
             req_switch_controller_->timeout = rclcpp::Duration::from_seconds(2.0);

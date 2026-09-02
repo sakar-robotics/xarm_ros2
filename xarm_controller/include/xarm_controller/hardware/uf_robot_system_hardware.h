@@ -83,6 +83,18 @@ namespace uf_robot_hardware
         // End-effector force/torque, N and Nm, ordered fx fy fz tx ty tz
         std::vector<double> ft_states_;
 
+        // Runtime force control, exposed as a second gpio component so the loop can be
+        // armed, disarmed and retuned mid operation without relaunching. Command order
+        // is FT_CMD_NAMES, state order is FT_CFG_STATE_NAMES.
+        std::vector<double> ft_cmds_;
+        std::vector<double> ft_cfg_states_;
+        bool ft_armed_;
+        bool prev_want_armed_;
+        bool has_ft_gpio_;
+        // "<ft gpio name>/", used to keep the force control controller out of the
+        // deactivate/reactivate cycle.
+        std::string ft_iface_prefix_;
+
         // Force control configuration (see set_ft_sensor_force_parameters)
         int ft_sensor_mode_;
         int ft_coord_;
@@ -132,6 +144,7 @@ namespace uf_robot_hardware
         rclcpp::Time curr_write_time_;
         rclcpp::Time prev_write_time_;
         rclcpp::Time prev_rearm_time_;
+        rclcpp::Time prev_ft_retry_time_;
 
         std::shared_ptr<rclcpp::Node> node_;
         std::shared_ptr<rclcpp::Node> hw_node_;
@@ -158,9 +171,22 @@ namespace uf_robot_hardware
         bool _parse_vecn(const std::string& str, float *out, int n);
         void _init_ft_params(void);
         int _setup_ft_sensor(void);
+        // Push whatever the ft gpio command interfaces currently hold to the arm.
+        // Called from write(); every call it makes is skipped unless something changed.
+        void _apply_ft_commands(void);
+        // Switch the onboard force loop on or off. Returns true if the arm ended up in
+        // the requested state.
+        bool _arm_ft(bool on);
+        void _refresh_ft_cfg_states(void);
         int _go_home(void);
         bool _tcp_cmd_is_valid(void);
         bool _tcp_cmds_is_change(double threshold = 0.00001);
+
+        // True while the arm is in state 5 (CONFIG_CHANGED), which every force config
+        // change causes. Re-arms the arm and tells write() to skip the cycle.
+        bool _handle_config_changed(void);
+        // A controller that only claims ft gpio interfaces commands no motion.
+        bool _is_ft_controller(const controller_manager_msgs::msg::ControllerState& c);
 
         bool _need_reset(void);
 

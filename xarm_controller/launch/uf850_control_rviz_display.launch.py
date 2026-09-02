@@ -19,10 +19,10 @@ def generate_launch_description():
     # 'normal' carries no F/T or CGPIO data at all, so the uf850 defaults to 'rich'.
     report_type = LaunchConfiguration('report_type', default='rich')
     # uf850 force control / homing / Cartesian write params
-    ft_sensor_mode = LaunchConfiguration('ft_sensor_mode', default='2')
-    ft_coord = LaunchConfiguration('ft_coord', default='1')
-    ft_c_axis = LaunchConfiguration('ft_c_axis', default='"0 0 1 0 1 0"')
-    ft_f_ref = LaunchConfiguration('ft_f_ref', default='"0 0 8 0 8 0"')
+    ft_sensor_mode = LaunchConfiguration('ft_sensor_mode', default='0')
+    ft_coord = LaunchConfiguration('ft_coord', default='0')
+    ft_c_axis = LaunchConfiguration('ft_c_axis', default='"1 0 0 0 1 0"')
+    ft_f_ref = LaunchConfiguration('ft_f_ref', default='"8 0 0 0 0 0"')
     ft_limits = LaunchConfiguration('ft_limits', default='"0 0 0 0 0 0"')
     ft_kp = LaunchConfiguration('ft_kp', default='"0.005 0.005 0.005 0.005 0.005 0.005"')
     ft_ki = LaunchConfiguration('ft_ki', default='"0.00005 0.00005 0.00005 0.00005 0.00005 0.00005"')
@@ -31,7 +31,7 @@ def generate_launch_description():
     ft_zero_on_activate = LaunchConfiguration('ft_zero_on_activate', default='true')
     home_on_activate = LaunchConfiguration('home_on_activate', default='true')
     home_pose = LaunchConfiguration('home_pose', default='')
-    home_joints = LaunchConfiguration('home_joints', default='')
+    home_joints = LaunchConfiguration('home_joints', default='"45 0 0 0 90 0"')
     home_speed = LaunchConfiguration('home_speed', default='100')
     home_acc = LaunchConfiguration('home_acc', default='1000')
     home_joint_speed = LaunchConfiguration('home_joint_speed', default='20')
@@ -143,7 +143,8 @@ def generate_launch_description():
                 '--controller-manager-timeout', '120',
             ],
         )
-        for name in ('joint_state_broadcaster', 'uf_ft_sensor_broadcaster', 'tcp_pose_controller')
+        for name in ('joint_state_broadcaster', 'uf_ft_sensor_broadcaster',
+                     'tcp_pose_controller', 'ft_control_controller')
     ]
 
     return LaunchDescription([

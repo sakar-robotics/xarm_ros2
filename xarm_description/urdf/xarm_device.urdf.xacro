@@ -17,10 +17,10 @@
   <xacro:arg name="report_type" default="normal"/>
 
   <!-- uf850 force control / homing / Cartesian write params -->
-  <xacro:arg name="ft_sensor_mode" default="2"/>
-  <xacro:arg name="ft_coord" default="1"/>
-  <xacro:arg name="ft_c_axis" default="0 0 1 0 1 0"/>
-  <xacro:arg name="ft_f_ref" default="0 0 8 0 8 0"/>
+  <xacro:arg name="ft_sensor_mode" default="0"/>
+  <xacro:arg name="ft_coord" default="0"/>
+  <xacro:arg name="ft_c_axis" default="1 0 0 0 1 0"/>
+  <xacro:arg name="ft_f_ref" default="8 0 0 0 0 0"/>
   <xacro:arg name="ft_limits" default="0 0 0 0 0 0"/>
   <xacro:arg name="ft_kp" default="0.005 0.005 0.005 0.005 0.005 0.005"/>
   <xacro:arg name="ft_ki" default="0.00005 0.00005 0.00005 0.00005 0.00005 0.00005"/>
@@ -29,7 +29,7 @@
   <xacro:arg name="ft_zero_on_activate" default="true"/>
   <xacro:arg name="home_on_activate" default="true"/>
   <xacro:arg name="home_pose" default=""/>
-  <xacro:arg name="home_joints" default=""/>
+  <xacro:arg name="home_joints" default="45 0 0 0 90 0"/>
   <xacro:arg name="home_speed" default="100"/>
   <xacro:arg name="home_acc" default="1000"/>
   <xacro:arg name="home_joint_speed" default="20"/>
