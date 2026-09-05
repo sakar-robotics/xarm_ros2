@@ -796,6 +796,46 @@ namespace uf_robot_hardware
         xarm_driver_.arm->clean_error();
         xarm_driver_.arm->clean_warn();
         xarm_driver_.arm->motion_enable(true);
+
+        // The arm is bolted to the lift plate rotated +0.785 rad about Z, so link_base's
+        // axes are 45 degrees off base_link's. This hands that rotation to the arm
+        // itself: with it set, every Cartesian pose the box reports and accepts is in a
+        // frame parallel to base_link, so `tcp` x/y and set_position() need no rotating
+        // on this side.
+        //
+        // SIGN. The box applies the offset as p_world = R_z(yaw) * p_link_base, so the
+        // value here is link_base's yaw in base_link -- -0.785, the SAME sign as the
+        // mount, not its inverse. Sanity check it against the homing pose in the log:
+        // home_joints puts joint 1 at +45 deg, so the TCP must come back at +45 deg in
+        // x/y (x ~= y). If it reports x ~= 0.366, y ~= 0 the sign is inverted, and if it
+        // reports y ~= 0.366, x ~= 0 the offset is being applied twice.
+        //
+        // Written here rather than by a `/ufactory/set_world_offset` call after bringup
+        // because every Cartesian number crossing this interface -- the seed below, the
+        // homing pose, and every set_position() in write() -- is in this frame, so the
+        // offset has to be on the box before any of them are read or sent.
+        //
+        // Deliberately hardcoded and unconditional: it describes how the arm is bolted
+        // to this robot, not a choice anybody makes per launch. The controller's
+        // `mount_offset.yaw` MUST stay 0.0 -- it is the same rotation, and applying both
+        // cancels them out.
+        //
+        // Ordering: written BEFORE set_state(START) below, because a coordinate offset
+        // does not take effect on the arm until the next state change.
+        fp32 world_offset[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, -0.785 };
+        int wo_ret = xarm_driver_.arm->set_world_offset(world_offset);
+        if (wo_ret != 0) {
+            // Not fatal, but say so loudly: every pose from here on would be off by the
+            // yaw, and nothing downstream can tell that from a badly aimed target.
+            RCLCPP_ERROR(LOGGER, "[%s] set_world_offset failed, ret=%d."
+                " Cartesian poses are NOT in the expected world frame.", robot_ip_.c_str(), wo_ret);
+        }
+        else {
+            RCLCPP_INFO(LOGGER, "[%s] World offset set to [%.1f %.1f %.1f mm, %.4f %.4f %.4f rad]",
+                robot_ip_.c_str(), world_offset[0], world_offset[1], world_offset[2],
+                world_offset[3], world_offset[4], world_offset[5]);
+        }
+
         // The arm stays in position mode for its whole lifetime: the onboard force
         // control app only runs in mode 0, and set_position is a mode 0 command.
         xarm_driver_.arm->set_mode(XARM_MODE::POSE);
