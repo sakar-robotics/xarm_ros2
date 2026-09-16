@@ -352,8 +352,12 @@ namespace uf_robot_hardware
         if (it != info_.hardware_parameters.end()) {
             velocity_control_ = (it->second == "True" || it->second == "true");
         }
-        RCLCPP_INFO(LOGGER, "[%s] dof: %d, velocity_control: %d, add_gripper: %d, add_bio_gripper: %d, baud_checkset: %d, default_gripper_baud: %d",
-            robot_ip_.c_str(), dof, velocity_control_, add_gripper, add_bio_gripper, baud_checkset, default_gripper_baud);
+        it = info_.hardware_parameters.find("joint_mode");
+        if (it != info_.hardware_parameters.end()) {
+            joint_mode_ = (it->second == "True" || it->second == "true");
+        }
+        RCLCPP_INFO(LOGGER, "[%s] dof: %d, velocity_control: %d, joint_mode: %d, add_gripper: %d, add_bio_gripper: %d, baud_checkset: %d, default_gripper_baud: %d",
+            robot_ip_.c_str(), dof, velocity_control_, joint_mode_, add_gripper, add_bio_gripper, baud_checkset, default_gripper_baud);
 
         // 20250318, disable xarm_driver publish joint_states
         xarm_driver_.init(node_, robot_ip_, true);
@@ -368,6 +372,7 @@ namespace uf_robot_hardware
         }
         info_ = info;
         velocity_control_ = false;
+        joint_mode_ = false;
         read_code_ = 0;
         write_code_ = 0;
 
@@ -398,68 +403,106 @@ namespace uf_robot_hardware
         ft_armed_ = false;
         memset(tcp_standoff_, 0, sizeof(tcp_standoff_));
 
-        // Joints are state only. The arm stays in XARM_MODE::POSE and is commanded
-        // through the Cartesian gpio component, so joints carry no command interface.
-        for (const hardware_interface::ComponentInfo & joint : info_.joints) {
-            bool has_pos_state_interface = false;
-            for (auto i = 0u; i < joint.state_interfaces.size(); ++i) {
-                if (joint.state_interfaces[i].name == hardware_interface::HW_IF_POSITION) {
-                    has_pos_state_interface = true;
-                    break;
+        has_ft_gpio_ = false;
+        ft_iface_prefix_ = std::string();
+
+        if (joint_mode_) {
+            // joint_mode: joints are commanded directly (see uf850.ros2_control.xacro), and
+            // there is no Cartesian tcp or force gpio at all in this mode -- the arm can't be
+            // in both XARM_MODE::POSE and XARM_MODE::SERVO/VELO_JOINT at once.
+            for (const hardware_interface::ComponentInfo & joint : info_.joints) {
+                bool has_pos_cmd_interface = false;
+                for (auto i = 0u; i < joint.command_interfaces.size(); ++i) {
+                    if (joint.command_interfaces[i].name == hardware_interface::HW_IF_POSITION) {
+                        has_pos_cmd_interface = true;
+                        break;
+                    }
                 }
-            }
-            if (!has_pos_state_interface) {
-                RCLCPP_ERROR(LOGGER, "[%s] Joint '%s' has %ld state interfaces found, but not found %s state interface",
-                    robot_ip_.c_str(), joint.name.c_str(), joint.state_interfaces.size(), hardware_interface::HW_IF_POSITION
-                );
-                return CallbackReturn::ERROR;
-            }
-        }
-
-        if (info_.gpios.size() < 1 || info_.gpios[0].command_interfaces.size() != 6) {
-            RCLCPP_ERROR(LOGGER, "[%s] Expected a gpio component with 6 command interfaces (x y z roll pitch yaw), found %ld gpio component(s)",
-                robot_ip_.c_str(), info_.gpios.size());
-            return CallbackReturn::ERROR;
-        }
-        for (const auto & iface : info_.gpios[0].command_interfaces) {
-            if (_index_of(TCP_IF_NAMES, iface.name) < 0) {
-                RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s', expected one of x y z roll pitch yaw",
-                    robot_ip_.c_str(), info_.gpios[0].name.c_str(), iface.name.c_str());
-                return CallbackReturn::ERROR;
-            }
-        }
-
-        // The ft gpio component is optional: without it the force loop is still
-        // configurable from the launch params, just not at runtime.
-        has_ft_gpio_ = info_.gpios.size() > 1;
-        ft_iface_prefix_ = has_ft_gpio_ ? info_.gpios[1].name + "/" : std::string();
-        if (has_ft_gpio_) {
-            for (const auto & iface : info_.gpios[1].command_interfaces) {
-                if (_index_of_n(FT_CMD_NAMES, FT_CMD_COUNT, iface.name) < 0) {
-                    RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s'",
-                        robot_ip_.c_str(), info_.gpios[1].name.c_str(), iface.name.c_str());
+                if (!has_pos_cmd_interface) {
+                    RCLCPP_ERROR(LOGGER, "[%s] joint_mode is set but joint '%s' has %ld command interfaces found, but not found %s command interface",
+                        robot_ip_.c_str(), joint.name.c_str(), joint.command_interfaces.size(), hardware_interface::HW_IF_POSITION
+                    );
                     return CallbackReturn::ERROR;
                 }
-            }
-            for (const auto & iface : info_.gpios[1].state_interfaces) {
-                if (_index_of_n(FT_CFG_STATE_NAMES, FT_CFG_COUNT, iface.name) < 0) {
-                    RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected state interface '%s'",
-                        robot_ip_.c_str(), info_.gpios[1].name.c_str(), iface.name.c_str());
+                bool has_pos_state_interface = false;
+                for (auto i = 0u; i < joint.state_interfaces.size(); ++i) {
+                    if (joint.state_interfaces[i].name == hardware_interface::HW_IF_POSITION) {
+                        has_pos_state_interface = true;
+                        break;
+                    }
+                }
+                if (!has_pos_state_interface) {
+                    RCLCPP_ERROR(LOGGER, "[%s] Joint '%s' has %ld state interfaces found, but not found %s state interface",
+                        robot_ip_.c_str(), joint.name.c_str(), joint.state_interfaces.size(), hardware_interface::HW_IF_POSITION
+                    );
                     return CallbackReturn::ERROR;
                 }
             }
         }
+        else {
+            // Joints are state only. The arm stays in XARM_MODE::POSE and is commanded
+            // through the Cartesian gpio component, so joints carry no command interface.
+            for (const hardware_interface::ComponentInfo & joint : info_.joints) {
+                bool has_pos_state_interface = false;
+                for (auto i = 0u; i < joint.state_interfaces.size(); ++i) {
+                    if (joint.state_interfaces[i].name == hardware_interface::HW_IF_POSITION) {
+                        has_pos_state_interface = true;
+                        break;
+                    }
+                }
+                if (!has_pos_state_interface) {
+                    RCLCPP_ERROR(LOGGER, "[%s] Joint '%s' has %ld state interfaces found, but not found %s state interface",
+                        robot_ip_.c_str(), joint.name.c_str(), joint.state_interfaces.size(), hardware_interface::HW_IF_POSITION
+                    );
+                    return CallbackReturn::ERROR;
+                }
+            }
 
-        if (info_.sensors.size() < 1 || info_.sensors[0].state_interfaces.size() != 6) {
-            RCLCPP_ERROR(LOGGER, "[%s] Expected a sensor component with 6 state interfaces (force.x .. torque.z), found %ld sensor component(s)",
-                robot_ip_.c_str(), info_.sensors.size());
-            return CallbackReturn::ERROR;
-        }
-        for (const auto & iface : info_.sensors[0].state_interfaces) {
-            if (_index_of(FT_IF_NAMES, iface.name) < 0) {
-                RCLCPP_ERROR(LOGGER, "[%s] sensor '%s' has unexpected state interface '%s', expected one of force.x force.y force.z torque.x torque.y torque.z",
-                    robot_ip_.c_str(), info_.sensors[0].name.c_str(), iface.name.c_str());
+            if (info_.gpios.size() < 1 || info_.gpios[0].command_interfaces.size() != 6) {
+                RCLCPP_ERROR(LOGGER, "[%s] Expected a gpio component with 6 command interfaces (x y z roll pitch yaw), found %ld gpio component(s)",
+                    robot_ip_.c_str(), info_.gpios.size());
                 return CallbackReturn::ERROR;
+            }
+            for (const auto & iface : info_.gpios[0].command_interfaces) {
+                if (_index_of(TCP_IF_NAMES, iface.name) < 0) {
+                    RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s', expected one of x y z roll pitch yaw",
+                        robot_ip_.c_str(), info_.gpios[0].name.c_str(), iface.name.c_str());
+                    return CallbackReturn::ERROR;
+                }
+            }
+
+            // The ft gpio component is optional: without it the force loop is still
+            // configurable from the launch params, just not at runtime.
+            has_ft_gpio_ = info_.gpios.size() > 1;
+            ft_iface_prefix_ = has_ft_gpio_ ? info_.gpios[1].name + "/" : std::string();
+            if (has_ft_gpio_) {
+                for (const auto & iface : info_.gpios[1].command_interfaces) {
+                    if (_index_of_n(FT_CMD_NAMES, FT_CMD_COUNT, iface.name) < 0) {
+                        RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s'",
+                            robot_ip_.c_str(), info_.gpios[1].name.c_str(), iface.name.c_str());
+                        return CallbackReturn::ERROR;
+                    }
+                }
+                for (const auto & iface : info_.gpios[1].state_interfaces) {
+                    if (_index_of_n(FT_CFG_STATE_NAMES, FT_CFG_COUNT, iface.name) < 0) {
+                        RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected state interface '%s'",
+                            robot_ip_.c_str(), info_.gpios[1].name.c_str(), iface.name.c_str());
+                        return CallbackReturn::ERROR;
+                    }
+                }
+            }
+
+            if (info_.sensors.size() < 1 || info_.sensors[0].state_interfaces.size() != 6) {
+                RCLCPP_ERROR(LOGGER, "[%s] Expected a sensor component with 6 state interfaces (force.x .. torque.z), found %ld sensor component(s)",
+                    robot_ip_.c_str(), info_.sensors.size());
+                return CallbackReturn::ERROR;
+            }
+            for (const auto & iface : info_.sensors[0].state_interfaces) {
+                if (_index_of(FT_IF_NAMES, iface.name) < 0) {
+                    RCLCPP_ERROR(LOGGER, "[%s] sensor '%s' has unexpected state interface '%s', expected one of force.x force.y force.z torque.x torque.y torque.z",
+                        robot_ip_.c_str(), info_.sensors[0].name.c_str(), iface.name.c_str());
+                    return CallbackReturn::ERROR;
+                }
             }
         }
 
@@ -475,6 +518,11 @@ namespace uf_robot_hardware
                 info_.joints[i].name, hardware_interface::HW_IF_POSITION, &position_states_[i]));
             state_interfaces.emplace_back(hardware_interface::StateInterface(
                 info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &velocity_states_[i]));
+        }
+
+        // joint_mode declares no gpio/sensor components at all -- see on_init().
+        if (joint_mode_) {
+            return state_interfaces;
         }
 
         // Measured TCP pose, m and rad. Interfaces are bound by name so the URDF may
@@ -510,10 +558,25 @@ namespace uf_robot_hardware
 
     std::vector<hardware_interface::CommandInterface> UFRobotSystemHardware::export_command_interfaces()
     {
+        std::vector<hardware_interface::CommandInterface> command_interfaces;
+
+        // joint_mode: the arm is commanded per joint (set_servo_angle_j()/
+        // vc_set_joint_velocity() in write()), not through the Cartesian tcp gpio below --
+        // see uf850.ros2_control.xacro's joint_mode param doc for why these are mutually
+        // exclusive rather than both exported at once.
+        if (joint_mode_) {
+            for (uint i = 0; i < info_.joints.size(); i++) {
+                command_interfaces.emplace_back(hardware_interface::CommandInterface(
+                    info_.joints[i].name, hardware_interface::HW_IF_POSITION, &position_cmds_[i]));
+                command_interfaces.emplace_back(hardware_interface::CommandInterface(
+                    info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &velocity_cmds_[i]));
+            }
+            return command_interfaces;
+        }
+
         // Cartesian only. In XARM_MODE::POSE the arm takes queued planned motions
         // (set_position), not the per cycle joint stream a trajectory controller emits,
         // so no joint command interfaces are exported.
-        std::vector<hardware_interface::CommandInterface> command_interfaces;
         for (const auto & iface : info_.gpios[0].command_interfaces) {
             int idx = _index_of(TCP_IF_NAMES, iface.name);
             if (idx < 0) continue;
@@ -793,6 +856,41 @@ namespace uf_robot_hardware
         client_list_controller_ = hw_node_->create_client<controller_manager_msgs::srv::ListControllers>("/controller_manager/list_controllers");
         client_switch_controller_ = hw_node_->create_client<controller_manager_msgs::srv::SwitchController>("/controller_manager/switch_controller");
 
+        // joint_mode has no homing, no force control, and no tcp to seed -- it is a
+        // straight restore of what this hardware component did before Cartesian tcp/ft
+        // support replaced it, not that behavior plus this one layered on top.
+        if (joint_mode_) {
+            xarm_driver_.arm->clean_error();
+            xarm_driver_.arm->clean_warn();
+            xarm_driver_.arm->motion_enable(true);
+            xarm_driver_.arm->set_mode(velocity_control_ ? XARM_MODE::VELO_JOINT : XARM_MODE::SERVO);
+            xarm_driver_.arm->set_state(XARM_STATE::START);
+
+            for (uint i = 0; i < position_states_.size(); i++) {
+                if (std::isnan(position_states_[i])) {
+                    position_states_[i] = 0;
+                    position_cmds_[i] = 0;
+                } else {
+                    position_cmds_[i] = position_states_[i];
+                }
+            }
+            for (uint i = 0; i < velocity_states_.size(); i++) {
+                if (std::isnan(velocity_states_[i])) {
+                    velocity_states_[i] = 0;
+                    velocity_cmds_[i] = 0;
+                } else {
+                    velocity_cmds_[i] = velocity_states_[i];
+                }
+            }
+
+            prev_write_time_ = node_->get_clock()->now();
+            prev_rearm_time_ = prev_write_time_;
+            prev_ft_retry_time_ = prev_write_time_;
+
+            RCLCPP_INFO(LOGGER, "[%s] System Sucessfully started (joint_mode)!", robot_ip_.c_str());
+            return CallbackReturn::SUCCESS;
+        }
+
         xarm_driver_.arm->clean_error();
         xarm_driver_.arm->clean_warn();
         xarm_driver_.arm->motion_enable(true);
@@ -968,6 +1066,15 @@ namespace uf_robot_hardware
     {
         RCLCPP_INFO(LOGGER, "[%s] Stopping ...please wait...", robot_ip_.c_str());
 
+        if (joint_mode_) {
+            // Leave the arm back in its normal default mode rather than stuck in
+            // SERVO/VELO_JOINT, the same way on_activate found it in POSE.
+            xarm_driver_.arm->set_mode(XARM_MODE::POSE);
+            xarm_driver_.arm->set_state(XARM_STATE::STOP);
+            RCLCPP_INFO(LOGGER, "[%s] System sucessfully stopped (joint_mode)!", robot_ip_.c_str());
+            return CallbackReturn::SUCCESS;
+        }
+
         // Tear the force loop down before stopping. Leaving force mode armed makes
         // later motion commands behave unpredictably.
         if (ft_sensor_mode_ != 0) {
@@ -1071,6 +1178,41 @@ namespace uf_robot_hardware
             return hardware_interface::return_type::OK;
         }
         if (xarm_driver_.arm->cmd_num >= cmd_queue_max_) {
+            return hardware_interface::return_type::OK;
+        }
+
+        if (joint_mode_) {
+            // Restored as-is from before Cartesian tcp/ft support replaced it: velocity
+            // streams every cycle, position only sends set_servo_angle_j() when the
+            // target actually moved (or a full second has passed with nothing sent, so a
+            // stalled connection is still visible in the controller's own timeout logic).
+            if (velocity_control_) {
+                for (uint i = 0; i < velocity_cmds_.size(); i++) {
+                    cmds_float_[i] = (float)velocity_cmds_[i];
+                }
+                int cmd_ret = xarm_driver_.arm->vc_set_joint_velocity(cmds_float_, true, VELO_DURATION);
+                if (cmd_ret != 0) {
+                    RCLCPP_WARN(LOGGER, "[%s] vc_set_joint_velocity, ret=%d", robot_ip_.c_str(), cmd_ret);
+                }
+            }
+            else {
+                for (uint i = 0; i < position_cmds_.size(); i++) {
+                    cmds_float_[i] = (float)position_cmds_[i];
+                }
+                curr_write_time_ = node_->get_clock()->now();
+                if (curr_write_time_.seconds() - prev_write_time_.seconds() > 1 || _check_cmds_is_change(prev_cmds_float_, cmds_float_)) {
+                    int cmd_ret = xarm_driver_.arm->set_servo_angle_j(cmds_float_, 0, 0, 0);
+                    if (cmd_ret != 0) {
+                        RCLCPP_WARN(LOGGER, "[%s] set_servo_angle_j, ret=%d", robot_ip_.c_str(), cmd_ret);
+                    }
+                    else {
+                        prev_write_time_ = curr_write_time_;
+                        for (int i = 0; i < 7; i++) {
+                            prev_cmds_float_[i] = cmds_float_[i];
+                        }
+                    }
+                }
+            }
             return hardware_interface::return_type::OK;
         }
 
@@ -1280,10 +1422,13 @@ namespace uf_robot_hardware
             return false;
         }
 
-        if (curr_mode != XARM_MODE::POSE) {
+        int expected_mode = joint_mode_
+            ? (velocity_control_ ? XARM_MODE::VELO_JOINT : XARM_MODE::SERVO)
+            : XARM_MODE::POSE;
+        if (curr_mode != expected_mode) {
             RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
-                "[%s] Not ready to write: mode=%d, expected 0 (position)",
-                robot_ip_.c_str(), curr_mode);
+                "[%s] Not ready to write: mode=%d, expected %d",
+                robot_ip_.c_str(), curr_mode, expected_mode);
             last_not_ready = true;
             return false;
         }

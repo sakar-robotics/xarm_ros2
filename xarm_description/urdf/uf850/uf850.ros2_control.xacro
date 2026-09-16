@@ -2,6 +2,7 @@
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:macro name="uf850_ros2_control" params="prefix
     velocity_control:='false'
+    joint_mode:='false'
     ros2_control_plugin:='uf_robot_hardware/UFRobotSystemHardware'
     hw_ns:='xarm' add_gripper:='false' add_bio_gripper:='false'
     robot_ip:='' report_type:='normal' baud_checkset:='true' default_gripper_baud:=2000000
@@ -29,6 +30,14 @@
         <xacro:if value="${ros2_control_plugin == 'uf_robot_hardware/UFRobotSystemHardware'}">
           <param name="hw_ns">${prefix}${hw_ns}</param>
           <param name="velocity_control">${velocity_control}</param>
+          <!-- true: joints get position+velocity command interfaces and the arm is
+               commanded with set_servo_angle_j()/vc_set_joint_velocity() in
+               XARM_MODE::SERVO or VELO_JOINT, the same way this hardware component did
+               before Cartesian tcp/ft support replaced it. Mutually exclusive with that
+               support, since the arm can only be in one XARM_MODE at a time, not a
+               launch-time choice to layer both onto one running arm. false (default):
+               today's Cartesian tcp/ft gpio behaviour, XARM_MODE::POSE, unchanged. -->
+          <param name="joint_mode">${joint_mode}</param>
           <param name="prefix">P${prefix}</param>
           <param name="robot_ip">R${robot_ip}</param>
           <param name="report_type">${report_type}</param>
@@ -85,6 +94,10 @@
         <!-- <plugin>uf_robot_hardware/UFRobotSystemHardware</plugin> -->
       </hardware>
       <joint name="${prefix}joint1">
+        <xacro:if value="${joint_mode}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -94,6 +107,10 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint2">
+        <xacro:if value="${joint_mode}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -103,6 +120,10 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint3">
+        <xacro:if value="${joint_mode}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -112,6 +133,10 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint4">
+        <xacro:if value="${joint_mode}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -121,6 +146,10 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint5">
+        <xacro:if value="${joint_mode}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -130,6 +159,10 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint6">
+        <xacro:if value="${joint_mode}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -138,9 +171,11 @@
         </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
-      <!-- Cartesian TCP command and state, SI units (m, rad). The arm runs in
-           XARM_MODE::POSE for its whole lifetime, so motion is commanded with
-           set_position() through these interfaces rather than per joint. -->
+      <!-- Cartesian TCP command and state, SI units (m, rad), and the force control gpios
+           below: all three are POSE-mode only, so joint_mode drops them entirely rather
+           than declaring interfaces the hardware component won't export in that mode
+           (its on_init() requires zero gpios/sensors when joint_mode is set, to match). -->
+      <xacro:unless value="${joint_mode}">
       <gpio name="${prefix}tcp">
         <command_interface name="x"/>
         <command_interface name="y"/>
@@ -230,6 +265,7 @@
           <param name="initial_value">0.0</param>
         </state_interface>
       </sensor>
+      </xacro:unless>
     </ros2_control>
   </xacro:macro>
 </robot>

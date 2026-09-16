@@ -125,6 +125,12 @@ namespace uf_robot_hardware
         int cmd_queue_max_; // skip write() when the controller cache is at least this deep
 
         bool velocity_control_;
+        // True: joints are commanded (set_servo_angle_j()/vc_set_joint_velocity() in
+        // XARM_MODE::SERVO or VELO_JOINT), matching this hardware component's own
+        // behavior before Cartesian tcp/ft support replaced it. Mutually exclusive with
+        // that support at the hardware level, not a runtime toggle -- see
+        // uf850.ros2_control.xacro's own joint_mode param doc.
+        bool joint_mode_;
         bool initialized_;
         bool read_ready_;
         bool reactivate_controller_later_;
