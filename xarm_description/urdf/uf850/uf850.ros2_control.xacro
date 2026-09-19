@@ -2,6 +2,7 @@
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:macro name="uf850_ros2_control" params="prefix
     velocity_control:='false'
+    cartesian_servo_mode:='false'
     ros2_control_plugin:='uf_robot_hardware/UFRobotSystemHardware'
     hw_ns:='xarm' add_gripper:='false' add_bio_gripper:='false'
     robot_ip:='' report_type:='normal' baud_checkset:='true' default_gripper_baud:=2000000
@@ -29,6 +30,11 @@
         <xacro:if value="${ros2_control_plugin == 'uf_robot_hardware/UFRobotSystemHardware'}">
           <param name="hw_ns">${prefix}${hw_ns}</param>
           <param name="velocity_control">${velocity_control}</param>
+          <!-- true: set_servo_cartesian()/XARM_MODE::SERVO streams the tcp target
+               directly, no motion queue, no backlog/jitter under continuous streaming.
+               Costs the ft gpio (force control needs XARM_MODE::POSE). false (default):
+               set_position()/XARM_MODE::POSE, force-control-capable, unchanged. -->
+          <param name="cartesian_servo_mode">${cartesian_servo_mode}</param>
           <param name="prefix">P${prefix}</param>
           <param name="robot_ip">R${robot_ip}</param>
           <param name="report_type">${report_type}</param>
@@ -138,9 +144,9 @@
         </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
-      <!-- Cartesian TCP command and state, SI units (m, rad). The arm runs in
-           XARM_MODE::POSE for its whole lifetime, so motion is commanded with
-           set_position() through these interfaces rather than per joint. -->
+      <!-- Cartesian TCP command and state, SI units (m, rad). Commanded with
+           set_position() in POSE or set_servo_cartesian() in SERVO
+           (cartesian_servo_mode) rather than per joint. -->
       <gpio name="${prefix}tcp">
         <command_interface name="x"/>
         <command_interface name="y"/>
@@ -171,8 +177,12 @@
       <!-- Runtime force control. enable toggles the onboard force loop, coord picks
            base (0) or tool (1), c_axis_N marks an axis compliant and f_ref_N is its
            target in N or Nm. Vectors are one interface per element because
-           ros2_control command interfaces are scalar doubles. Optional: without
-           this component the loop is still set from the launch params. -->
+           ros2_control command interfaces are scalar doubles. Optional even in POSE
+           mode: without this component the loop is still set from the launch params,
+           just not adjustable at runtime. Dropped entirely under cartesian_servo_mode,
+           since the onboard force control app does not run in XARM_MODE::SERVO, so there
+           is nothing here for it to command (ft_sensor below still reads the wrench). -->
+      <xacro:unless value="${cartesian_servo_mode}">
       <gpio name="${prefix}ft">
         <command_interface name="enable"/>
         <command_interface name="coord"/>
@@ -207,6 +217,7 @@
           <param name="initial_value">0.0</param>
         </state_interface>
       </gpio>
+      </xacro:unless>
       <!-- End effector wrench, N and Nm. These interface names are what
            semantic_components::ForceTorqueSensor expects, so
            force_torque_sensor_broadcaster can claim them directly. -->
