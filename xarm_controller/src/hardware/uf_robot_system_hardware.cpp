@@ -1322,10 +1322,11 @@ namespace uf_robot_hardware
             return false;
         }
 
-        if (curr_mode != XARM_MODE::POSE) {
+        int expected_mode = cartesian_servo_mode_ ? XARM_MODE::SERVO : XARM_MODE::POSE;
+        if (curr_mode != expected_mode) {
             RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
-                "[%s] Not ready to write: mode=%d, expected 0 (position)",
-                robot_ip_.c_str(), curr_mode);
+                "[%s] Not ready to write: mode=%d, expected %d",
+                robot_ip_.c_str(), curr_mode, expected_mode);
             last_not_ready = true;
             return false;
         }
