@@ -85,33 +85,57 @@
         <!-- <plugin>uf_robot_hardware/UFRobotSystemHardware</plugin> -->
       </hardware>
       <joint name="${prefix}joint1">
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint2">
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint3">
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint4">
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint5">
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint6">
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
         <!-- <state_interface name="effort"/> -->
       </joint>
       <!-- Cartesian TCP command and state, SI units (m, rad). The arm runs in
@@ -124,12 +148,24 @@
         <command_interface name="roll"/>
         <command_interface name="pitch"/>
         <command_interface name="yaw"/>
-        <state_interface name="x"/>
-        <state_interface name="y"/>
-        <state_interface name="z"/>
-        <state_interface name="roll"/>
-        <state_interface name="pitch"/>
-        <state_interface name="yaw"/>
+        <state_interface name="x">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="y">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="z">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="roll">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="pitch">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="yaw">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </gpio>
 
       <!-- Runtime force control. enable toggles the onboard force loop, coord picks
@@ -152,23 +188,47 @@
         <command_interface name="f_ref_3"/>
         <command_interface name="f_ref_4"/>
         <command_interface name="f_ref_5"/>
-        <state_interface name="enable"/>
-        <state_interface name="mode"/>
-        <state_interface name="error"/>
-        <state_interface name="force_x"/>
-        <state_interface name="force_y"/>
-        <state_interface name="force_z"/>
+        <state_interface name="enable">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="mode">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="error">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="force_x">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="force_y">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="force_z">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </gpio>
       <!-- End effector wrench, N and Nm. These interface names are what
            semantic_components::ForceTorqueSensor expects, so
            force_torque_sensor_broadcaster can claim them directly. -->
       <sensor name="${prefix}ft_sensor">
-        <state_interface name="force.x"/>
-        <state_interface name="force.y"/>
-        <state_interface name="force.z"/>
-        <state_interface name="torque.x"/>
-        <state_interface name="torque.y"/>
-        <state_interface name="torque.z"/>
+        <state_interface name="force.x">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="force.y">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="force.z">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="torque.x">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="torque.y">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="torque.z">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </sensor>
     </ros2_control>
   </xacro:macro>
