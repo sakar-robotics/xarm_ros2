@@ -804,11 +804,13 @@ namespace uf_robot_hardware
         xarm_driver_.arm->clean_error();
         xarm_driver_.arm->clean_warn();
         xarm_driver_.arm->motion_enable(true);
-        // POSE (0): the onboard force control app only runs here, and set_position is a
-        // mode 0 command. SERVO (1, cartesian_servo_mode): set_servo_cartesian() streams
-        // the live target directly with no motion queue, at the cost of the force loop
-        // -- see cartesian_servo_mode's own doc in uf850.ros2_control.xacro.
-        xarm_driver_.arm->set_mode(cartesian_servo_mode_ ? XARM_MODE::SERVO : XARM_MODE::POSE);
+        // Always POSE here, regardless of cartesian_servo_mode: homing (_go_home(), below)
+        // and the pose/force setup that follows are all mode 0 commands -- set_servo_angle()
+        // (what has_home_joints_ homes with) silently does nothing in XARM_MODE::SERVO, and
+        // since it is called with wait=true and NO_TIMEOUT, that hangs on_activate() forever
+        // rather than failing. Switched to SERVO, if requested, only at the very end of this
+        // function, once everything that needs POSE is already done.
+        xarm_driver_.arm->set_mode(XARM_MODE::POSE);
         xarm_driver_.arm->set_state(XARM_STATE::START);
 
         // clean_error() cannot clear a fault that is still physically asserted, such as
@@ -965,6 +967,15 @@ namespace uf_robot_hardware
             }
         }
         _refresh_ft_cfg_states();
+
+        if (cartesian_servo_mode_) {
+            // Only now, since homing and the pose/force setup above all needed POSE.
+            // set_servo_cartesian() in write() requires this.
+            int mode_ret = xarm_driver_.arm->set_mode(XARM_MODE::SERVO);
+            xarm_driver_.arm->set_state(XARM_STATE::START);
+            RCLCPP_INFO(LOGGER, "[%s] Switched to XARM_MODE::SERVO for cartesian_servo_mode, ret=%d",
+                robot_ip_.c_str(), mode_ret);
+        }
 
         prev_write_time_ = node_->get_clock()->now();
         prev_rearm_time_ = prev_write_time_;
