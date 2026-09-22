@@ -352,8 +352,12 @@ namespace uf_robot_hardware
         if (it != info_.hardware_parameters.end()) {
             velocity_control_ = (it->second == "True" || it->second == "true");
         }
-        RCLCPP_INFO(LOGGER, "[%s] dof: %d, velocity_control: %d, add_gripper: %d, add_bio_gripper: %d, baud_checkset: %d, default_gripper_baud: %d",
-            robot_ip_.c_str(), dof, velocity_control_, add_gripper, add_bio_gripper, baud_checkset, default_gripper_baud);
+        it = info_.hardware_parameters.find("cartesian_servo_mode");
+        if (it != info_.hardware_parameters.end()) {
+            cartesian_servo_mode_ = (it->second == "True" || it->second == "true");
+        }
+        RCLCPP_INFO(LOGGER, "[%s] dof: %d, velocity_control: %d, cartesian_servo_mode: %d, add_gripper: %d, add_bio_gripper: %d, baud_checkset: %d, default_gripper_baud: %d",
+            robot_ip_.c_str(), dof, velocity_control_, cartesian_servo_mode_, add_gripper, add_bio_gripper, baud_checkset, default_gripper_baud);
 
         // 20250318, disable xarm_driver publish joint_states
         xarm_driver_.init(node_, robot_ip_, true);
@@ -368,6 +372,7 @@ namespace uf_robot_hardware
         }
         info_ = info;
         velocity_control_ = false;
+        cartesian_servo_mode_ = false;
         read_code_ = 0;
         write_code_ = 0;
 
@@ -397,6 +402,9 @@ namespace uf_robot_hardware
         ft_cfg_states_.resize(FT_CFG_COUNT, 0.0);
         ft_armed_ = false;
         memset(tcp_standoff_, 0, sizeof(tcp_standoff_));
+
+        has_ft_gpio_ = false;
+        ft_iface_prefix_ = std::string();
 
         // Joints are state only. The arm stays in XARM_MODE::POSE and is commanded
         // through the Cartesian gpio component, so joints carry no command interface.
@@ -796,8 +804,12 @@ namespace uf_robot_hardware
         xarm_driver_.arm->clean_error();
         xarm_driver_.arm->clean_warn();
         xarm_driver_.arm->motion_enable(true);
-        // The arm stays in position mode for its whole lifetime: the onboard force
-        // control app only runs in mode 0, and set_position is a mode 0 command.
+        // Always POSE here, regardless of cartesian_servo_mode: homing (_go_home(), below)
+        // and the pose/force setup that follows are all mode 0 commands -- set_servo_angle()
+        // (what has_home_joints_ homes with) silently does nothing in XARM_MODE::SERVO, and
+        // since it is called with wait=true and NO_TIMEOUT, that hangs on_activate() forever
+        // rather than failing. Switched to SERVO, if requested, only at the very end of this
+        // function, once everything that needs POSE is already done.
         xarm_driver_.arm->set_mode(XARM_MODE::POSE);
         xarm_driver_.arm->set_state(XARM_STATE::START);
 
@@ -956,6 +968,15 @@ namespace uf_robot_hardware
         }
         _refresh_ft_cfg_states();
 
+        if (cartesian_servo_mode_) {
+            // Only now, since homing and the pose/force setup above all needed POSE.
+            // set_servo_cartesian() in write() requires this.
+            int mode_ret = xarm_driver_.arm->set_mode(XARM_MODE::SERVO);
+            xarm_driver_.arm->set_state(XARM_STATE::START);
+            RCLCPP_INFO(LOGGER, "[%s] Switched to XARM_MODE::SERVO for cartesian_servo_mode, ret=%d",
+                robot_ip_.c_str(), mode_ret);
+        }
+
         prev_write_time_ = node_->get_clock()->now();
         prev_rearm_time_ = prev_write_time_;
         prev_ft_retry_time_ = prev_write_time_;
@@ -976,6 +997,10 @@ namespace uf_robot_hardware
         }
         int ret = xarm_driver_.arm->set_ft_sensor_enable(0);
         RCLCPP_INFO(LOGGER, "[%s] set_ft_sensor_enable(0), ret=%d", robot_ip_.c_str(), ret);
+        if (cartesian_servo_mode_) {
+            // Leave the arm in POSE rather than stuck in SERVO.
+            xarm_driver_.arm->set_mode(XARM_MODE::POSE);
+        }
         xarm_driver_.arm->set_state(XARM_STATE::STOP);
 
         RCLCPP_INFO(LOGGER, "[%s] System sucessfully stopped!", robot_ip_.c_str());
@@ -1085,20 +1110,37 @@ namespace uf_robot_hardware
         }
 
         // prev_tcp_cmds_ is only advanced on a successful send, so a pose skipped by
-        // either guard above is retried on the next cycle.
-        if (_tcp_cmd_is_valid() && _tcp_cmds_is_change()) {
+        // either guard above is retried on the next cycle. cartesian_servo_mode also
+        // sends on a 1s heartbeat even with nothing new: set_servo_cartesian() has no
+        // motion queue to sit idle in the way a queued set_position() does, so a
+        // genuinely still target still needs a periodic resend or the controller's own
+        // servo-mode liveness timeout lapses -- same reasoning as set_servo_angle_j()
+        // above.
+        curr_write_time_ = node_->get_clock()->now();
+        bool servo_heartbeat_due = cartesian_servo_mode_
+            && curr_write_time_.seconds() - prev_write_time_.seconds() > 1;
+        if (_tcp_cmd_is_valid() && (_tcp_cmds_is_change() || servo_heartbeat_due)) {
             fp32 pose[6];
             for (int i = 0; i < 6; i++) {
                 pose[i] = (float)((i < 3) ? tcp_cmds_[i] * 1000.0 : tcp_cmds_[i]);
             }
-            // (pose, radius, speed, acc, mvtime, wait). wait stays false: this is a
-            // queued motion, and blocking here would stall the control loop.
-            int cmd_ret = xarm_driver_.arm->set_position(pose, tcp_radius_, tcp_speed_, tcp_acc_, 0, false);
+            int cmd_ret;
+            if (cartesian_servo_mode_) {
+                // Executes only the most recently sent pose -- no motion queue, so no
+                // radius/blend parameter and no risk of the 512 deep backlog set_position()
+                // can build under continuous streaming.
+                cmd_ret = xarm_driver_.arm->set_servo_cartesian(pose, tcp_speed_, tcp_acc_, 0, false);
+            } else {
+                // (pose, radius, speed, acc, mvtime, wait). wait stays false: this is a
+                // queued motion, and blocking here would stall the control loop.
+                cmd_ret = xarm_driver_.arm->set_position(pose, tcp_radius_, tcp_speed_, tcp_acc_, 0, false);
+            }
             if (cmd_ret != 0) {
-                RCLCPP_WARN(LOGGER, "[%s] set_position, ret=%d", robot_ip_.c_str(), cmd_ret);
+                RCLCPP_WARN(LOGGER, "[%s] %s, ret=%d", robot_ip_.c_str(),
+                    cartesian_servo_mode_ ? "set_servo_cartesian" : "set_position", cmd_ret);
             }
             else {
-                prev_write_time_ = node_->get_clock()->now();
+                prev_write_time_ = curr_write_time_;
                 for (int i = 0; i < 6; i++) prev_tcp_cmds_[i] = tcp_cmds_[i];
             }
         }
@@ -1280,10 +1322,11 @@ namespace uf_robot_hardware
             return false;
         }
 
-        if (curr_mode != XARM_MODE::POSE) {
+        int expected_mode = cartesian_servo_mode_ ? XARM_MODE::SERVO : XARM_MODE::POSE;
+        if (curr_mode != expected_mode) {
             RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
-                "[%s] Not ready to write: mode=%d, expected 0 (position)",
-                robot_ip_.c_str(), curr_mode);
+                "[%s] Not ready to write: mode=%d, expected %d",
+                robot_ip_.c_str(), curr_mode, expected_mode);
             last_not_ready = true;
             return false;
         }
