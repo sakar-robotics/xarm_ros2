@@ -29,6 +29,10 @@ namespace uf_robot_hardware
     // Interfaces are bound by name rather than by position so the URDF may list them
     // in any order.
     static const char *TCP_IF_NAMES[6] = { "x", "y", "z", "roll", "pitch", "yaw" };
+    // Optional seventh command interface on the same gpio: the set_position() speed for
+    // the next motion, mm/s. No state counterpart -- the arm reports no speed setpoint
+    // back, only what it was last told.
+    static const char *TCP_SPEED_IF_NAME = "speed";
     static const char *FT_IF_NAMES[6] = {
         "force.x", "force.y", "force.z", "torque.x", "torque.y", "torque.z"
     };
@@ -217,8 +221,8 @@ namespace uf_robot_hardware
             ft_xe_limit_[3], ft_xe_limit_[4], ft_xe_limit_[5]);
         RCLCPP_INFO(LOGGER, "[%s] home_on_activate: %d, has_home_pose: %d, has_home_joints: %d",
             robot_ip_.c_str(), home_on_activate_, has_home_pose_, has_home_joints_);
-        RCLCPP_INFO(LOGGER, "[%s] tcp_speed: %.1f mm/s, tcp_acc: %.1f mm/s^2, tcp_radius: %.1f mm",
-            robot_ip_.c_str(), tcp_speed_, tcp_acc_, tcp_radius_);
+        RCLCPP_INFO(LOGGER, "[%s] tcp_speed: %.1f mm/s (fallback; a '%s' command interface overrides it per motion), tcp_acc: %.1f mm/s^2, tcp_radius: %.1f mm",
+            robot_ip_.c_str(), tcp_speed_, TCP_SPEED_IF_NAME, tcp_acc_, tcp_radius_);
     }
 
     template<typename ServiceT, typename SharedRequest, typename SharedResponse>
@@ -397,6 +401,9 @@ namespace uf_robot_hardware
         tcp_states_.resize(6, std::numeric_limits<double>::quiet_NaN());
         tcp_cmds_.resize(6, std::numeric_limits<double>::quiet_NaN());
         prev_tcp_cmds_.resize(6, std::numeric_limits<double>::quiet_NaN());
+        // 0 rather than NaN: this one is read on every send, and "nobody has written a
+        // speed" has to mean the tcp_speed param, not a refused motion.
+        tcp_speed_cmd_ = 0.0;
         ft_states_.resize(6, 0.0);
         ft_cmds_.resize(FT_CMD_COUNT, std::numeric_limits<double>::quiet_NaN());
         ft_cfg_states_.resize(FT_CFG_COUNT, 0.0);
@@ -424,15 +431,27 @@ namespace uf_robot_hardware
             }
         }
 
-        if (info_.gpios.size() < 1 || info_.gpios[0].command_interfaces.size() != 6) {
-            RCLCPP_ERROR(LOGGER, "[%s] Expected a gpio component with 6 command interfaces (x y z roll pitch yaw), found %ld gpio component(s)",
-                robot_ip_.c_str(), info_.gpios.size());
+        if (info_.gpios.size() < 1) {
+            RCLCPP_ERROR(LOGGER, "[%s] Expected a gpio component carrying the Cartesian setpoint, found none",
+                robot_ip_.c_str());
             return CallbackReturn::ERROR;
         }
+        bool has_pose_cmd[6] = { false, false, false, false, false, false };
         for (const auto & iface : info_.gpios[0].command_interfaces) {
-            if (_index_of(TCP_IF_NAMES, iface.name) < 0) {
-                RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s', expected one of x y z roll pitch yaw",
-                    robot_ip_.c_str(), info_.gpios[0].name.c_str(), iface.name.c_str());
+            int idx = _index_of(TCP_IF_NAMES, iface.name);
+            if (idx >= 0) {
+                has_pose_cmd[idx] = true;
+                continue;
+            }
+            if (iface.name == TCP_SPEED_IF_NAME) continue;
+            RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s', expected one of x y z roll pitch yaw speed",
+                robot_ip_.c_str(), info_.gpios[0].name.c_str(), iface.name.c_str());
+            return CallbackReturn::ERROR;
+        }
+        for (int i = 0; i < 6; i++) {
+            if (!has_pose_cmd[i]) {
+                RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' is missing the '%s' command interface; all six of x y z roll pitch yaw are required",
+                    robot_ip_.c_str(), info_.gpios[0].name.c_str(), TCP_IF_NAMES[i]);
                 return CallbackReturn::ERROR;
             }
         }
@@ -523,6 +542,11 @@ namespace uf_robot_hardware
         // so no joint command interfaces are exported.
         std::vector<hardware_interface::CommandInterface> command_interfaces;
         for (const auto & iface : info_.gpios[0].command_interfaces) {
+            if (iface.name == TCP_SPEED_IF_NAME) {
+                command_interfaces.emplace_back(hardware_interface::CommandInterface(
+                    info_.gpios[0].name, iface.name, &tcp_speed_cmd_));
+                continue;
+            }
             int idx = _index_of(TCP_IF_NAMES, iface.name);
             if (idx < 0) continue;
             command_interfaces.emplace_back(hardware_interface::CommandInterface(
@@ -1124,6 +1148,12 @@ namespace uf_robot_hardware
             for (int i = 0; i < 6; i++) {
                 pose[i] = (float)((i < 3) ? tcp_cmds_[i] * 1000.0 : tcp_cmds_[i]);
             }
+            // Per motion speed when something wrote one, the launch time tcp_speed
+            // otherwise. NaN fails the comparison and falls back too, which is what an
+            // unwritten interface reads as. Speed alone never triggers a send: the guard
+            // above is on the pose, so a new speed applies to the next motion rather than
+            // re issuing the one already running.
+            fp32 speed = (tcp_speed_cmd_ > 0.0) ? (fp32)tcp_speed_cmd_ : tcp_speed_;
             int cmd_ret;
             if (cartesian_servo_mode_) {
                 // Executes only the most recently sent pose -- no motion queue, so no

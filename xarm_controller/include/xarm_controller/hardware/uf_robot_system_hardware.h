@@ -79,6 +79,11 @@ namespace uf_robot_hardware
         // correction as an offset on top of the command, so a compliant axis must be
         // re-commanded to a fixed standoff or the command chases its own output.
         double tcp_standoff_[6];
+        // Optional `speed` command interface on the same gpio: the set_position() speed
+        // for the next motion, mm/s. 0 or NaN means "use tcp_speed_", so a URDF that
+        // does not declare it, or a controller that never writes it, keeps the launch
+        // time speed.
+        double tcp_speed_cmd_;
 
         // End-effector force/torque, N and Nm, ordered fx fy fz tx ty tz
         std::vector<double> ft_states_;
@@ -119,7 +124,7 @@ namespace uf_robot_hardware
         float home_joint_acc_;   // rad/s^2
 
         // set_position() parameters used by write()
-        float tcp_speed_;   // mm/s
+        float tcp_speed_;   // mm/s, the fallback for tcp_speed_cmd_
         float tcp_acc_;     // mm/s^2
         float tcp_radius_;  // mm, <0 disables blending
         int cmd_queue_max_; // skip write() when the controller cache is at least this deep

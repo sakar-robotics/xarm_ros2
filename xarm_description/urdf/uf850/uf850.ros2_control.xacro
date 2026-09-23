@@ -154,6 +154,10 @@
         <command_interface name="roll"/>
         <command_interface name="pitch"/>
         <command_interface name="yaw"/>
+        <!-- Optional. The set_position() speed for the next motion, mm/s; 0 leaves the
+             tcp_speed param above in charge. Nothing reads a speed back, so there is no
+             state counterpart. -->
+        <command_interface name="speed"/>
         <state_interface name="x">
           <param name="initial_value">0.0</param>
         </state_interface>
