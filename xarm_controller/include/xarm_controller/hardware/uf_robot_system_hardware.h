@@ -130,6 +130,9 @@ namespace uf_robot_hardware
         int cmd_queue_max_; // skip write() when the controller cache is at least this deep
 
         bool velocity_control_;
+        // set_servo_cartesian()/XARM_MODE::SERVO instead of set_position()/XARM_MODE::POSE --
+        // no motion queue, no backlog/jitter under continuous streaming, costs the ft gpio.
+        bool cartesian_servo_mode_;
         bool initialized_;
         bool read_ready_;
         bool reactivate_controller_later_;
