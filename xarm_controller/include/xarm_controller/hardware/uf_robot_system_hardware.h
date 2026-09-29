@@ -100,6 +100,12 @@ namespace uf_robot_hardware
         // deactivate/reactivate cycle.
         std::string ft_iface_prefix_;
 
+        // False on hardware with no physical F/T sensor at all -- distinct from
+        // ft_sensor_mode_ == 0, which just means the force loop is unarmed on an arm
+        // that does have one. Gates every SDK call that talks to the sensor, including
+        // the "keep it enabled so the wrench reads" one at activation.
+        bool has_ft_sensor_;
+
         // Force control configuration (see set_ft_sensor_force_parameters)
         int ft_sensor_mode_;
         int ft_coord_;
