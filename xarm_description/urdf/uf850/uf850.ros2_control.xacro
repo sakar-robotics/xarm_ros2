@@ -45,13 +45,10 @@
           <param name="robot_type">uf850</param>
           <param name="add_gripper">${add_gripper}</param>
           <param name="add_bio_gripper">${add_bio_gripper}</param>
-          <!-- Onboard force control. has_ft_sensor: false on hardware with no physical
-               sensor at all, skipping every F/T SDK call (including the "keep it enabled
-               so the wrench reads" one at activation) rather than letting a call against
-               nonexistent hardware fail and leave the controller stuck. ft_sensor_mode:
-               0 off (wrench still readable), 1 admittance, 2 force control. ft_coord: 0
-               base frame, 1 tool frame. Vectors are 6 space separated values, ordered
-               x y z rx ry rz. -->
+          <!-- Onboard force control. has_ft_sensor: false skips every F/T SDK call, for
+               hardware with no sensor at all. ft_sensor_mode: 0 off (wrench still readable),
+               1 admittance, 2 force control. ft_coord: 0 base frame, 1 tool frame. Vectors
+               are 6 space separated values, ordered x y z rx ry rz. -->
           <param name="has_ft_sensor">${has_ft_sensor}</param>
           <param name="ft_sensor_mode">${ft_sensor_mode}</param>
           <param name="ft_coord">${ft_coord}</param>
