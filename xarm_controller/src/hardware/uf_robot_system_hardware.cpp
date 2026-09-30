@@ -94,6 +94,7 @@ namespace uf_robot_hardware
         // The force loop is off at launch: arming it is an explicit act, through the ft
         // gpio command interfaces or ft_sensor_mode:=2. The setpoints below are the
         // values validated on the real UF850, ready for whenever it is armed.
+        has_ft_sensor_ = true;
         ft_sensor_mode_ = 0;
         ft_coord_ = 0;
         ft_zero_on_activate_ = true;
@@ -157,6 +158,7 @@ namespace uf_robot_hardware
             }
         };
 
+        bool_param("has_ft_sensor", has_ft_sensor_);
         int_param("ft_sensor_mode", ft_sensor_mode_);
         int_param("ft_coord", ft_coord_);
         int_param("cmd_queue_max", cmd_queue_max_);
@@ -211,8 +213,13 @@ namespace uf_robot_hardware
             }
         }
 
-        RCLCPP_INFO(LOGGER, "[%s] ft_sensor_mode: %d, ft_coord: %d, ft_zero_on_activate: %d, cmd_queue_max: %d",
-            robot_ip_.c_str(), ft_sensor_mode_, ft_coord_, ft_zero_on_activate_, cmd_queue_max_);
+        if (!has_ft_sensor_) {
+            // No sensor to arm, override whatever ft_sensor_mode was otherwise given.
+            ft_sensor_mode_ = 0;
+        }
+
+        RCLCPP_INFO(LOGGER, "[%s] has_ft_sensor: %d, ft_sensor_mode: %d, ft_coord: %d, ft_zero_on_activate: %d, cmd_queue_max: %d",
+            robot_ip_.c_str(), has_ft_sensor_, ft_sensor_mode_, ft_coord_, ft_zero_on_activate_, cmd_queue_max_);
         RCLCPP_INFO(LOGGER, "[%s] ft_c_axis: [%d %d %d %d %d %d], ft_f_ref: [%.3f %.3f %.3f %.3f %.3f %.3f]",
             robot_ip_.c_str(), ft_c_axis_[0], ft_c_axis_[1], ft_c_axis_[2], ft_c_axis_[3], ft_c_axis_[4], ft_c_axis_[5],
             ft_f_ref_[0], ft_f_ref_[1], ft_f_ref_[2], ft_f_ref_[3], ft_f_ref_[4], ft_f_ref_[5]);
@@ -567,10 +574,17 @@ namespace uf_robot_hardware
 
     void UFRobotSystemHardware::_refresh_ft_cfg_states(void)
     {
+        ft_cfg_states_[FT_CFG_ARMED] = ft_armed_ ? 1.0 : 0.0;
+        if (!has_ft_sensor_) {
+            // Nothing to query -- leave mode/error at 0 rather than whatever the SDK
+            // returns for a sensor that was never enabled.
+            ft_cfg_states_[FT_CFG_MODE] = 0;
+            ft_cfg_states_[FT_CFG_ERROR] = 0;
+            return;
+        }
         int ft_mode = -1, ft_is_started = -1, ft_err = -1;
         xarm_driver_.arm->get_ft_sensor_config(&ft_mode, &ft_is_started);
         xarm_driver_.arm->get_ft_sensor_error(&ft_err);
-        ft_cfg_states_[FT_CFG_ARMED] = ft_armed_ ? 1.0 : 0.0;
         ft_cfg_states_[FT_CFG_MODE] = ft_mode;
         ft_cfg_states_[FT_CFG_ERROR] = ft_err;
         // FT_CFG_FORCE.. are refreshed every read(), leave them alone here.
@@ -578,6 +592,11 @@ namespace uf_robot_hardware
 
     bool UFRobotSystemHardware::_arm_ft(bool on)
     {
+        if (on && !has_ft_sensor_) {
+            RCLCPP_ERROR(LOGGER, "[%s] Refusing to arm force control: has_ft_sensor is false",
+                robot_ip_.c_str());
+            return false;
+        }
         if (on) {
             // Refuse a target the loop cannot chase. Without this the arm sits with the
             // app started and nothing to seek, which reads as a silent failure.
@@ -960,7 +979,7 @@ namespace uf_robot_hardware
                 xarm_driver_.arm->set_ft_sensor_mode(0);
             }
         }
-        else {
+        else if (has_ft_sensor_) {
             // Force control off at activation. Still enable sensor communication so the
             // wrench publishes, zero it if asked (only valid off contact, and activation
             // right after homing is the one moment that is known), and push the force
@@ -975,6 +994,10 @@ namespace uf_robot_hardware
                 ft_kp_, ft_ki_, ft_kd_, ft_xe_limit_);
             RCLCPP_INFO(LOGGER, "[%s] Force control not armed, sensor enabled read only, ret=%d",
                 robot_ip_.c_str(), ret);
+        }
+        else {
+            RCLCPP_INFO(LOGGER, "[%s] has_ft_sensor is false, skipping every F/T SDK call",
+                robot_ip_.c_str());
         }
 
         ft_armed_ = ft_sensor_mode_ != 0;
