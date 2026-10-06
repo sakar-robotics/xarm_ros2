@@ -33,6 +33,7 @@ namespace uf_robot_hardware
     // the next motion, mm/s. No state counterpart -- the arm reports no speed setpoint
     // back, only what it was last told.
     static const char *TCP_SPEED_IF_NAME = "speed";
+    static const char *TCP_SERVO_IF_NAME = "servo";
     static const char *FT_IF_NAMES[6] = {
         "force.x", "force.y", "force.z", "torque.x", "torque.y", "torque.z"
     };
@@ -411,6 +412,8 @@ namespace uf_robot_hardware
         // 0 rather than NaN: this one is read on every send, and "nobody has written a
         // speed" has to mean the tcp_speed param, not a refused motion.
         tcp_speed_cmd_ = 0.0;
+        servo_cmd_ = std::numeric_limits<double>::quiet_NaN();
+        servo_state_ = cartesian_servo_mode_ ? 1.0 : 0.0;
         ft_states_.resize(6, 0.0);
         ft_cmds_.resize(FT_CMD_COUNT, std::numeric_limits<double>::quiet_NaN());
         ft_cfg_states_.resize(FT_CFG_COUNT, 0.0);
@@ -450,8 +453,8 @@ namespace uf_robot_hardware
                 has_pose_cmd[idx] = true;
                 continue;
             }
-            if (iface.name == TCP_SPEED_IF_NAME) continue;
-            RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s', expected one of x y z roll pitch yaw speed",
+            if (iface.name == TCP_SPEED_IF_NAME || iface.name == TCP_SERVO_IF_NAME) continue;
+            RCLCPP_ERROR(LOGGER, "[%s] gpio '%s' has unexpected command interface '%s', expected one of x y z roll pitch yaw speed servo",
                 robot_ip_.c_str(), info_.gpios[0].name.c_str(), iface.name.c_str());
             return CallbackReturn::ERROR;
         }
@@ -514,6 +517,11 @@ namespace uf_robot_hardware
         // Measured TCP pose, m and rad. Interfaces are bound by name so the URDF may
         // list x y z roll pitch yaw in any order.
         for (const auto & iface : info_.gpios[0].state_interfaces) {
+            if (iface.name == TCP_SERVO_IF_NAME) {
+                state_interfaces.emplace_back(hardware_interface::StateInterface(
+                    info_.gpios[0].name, iface.name, &servo_state_));
+                continue;
+            }
             int idx = _index_of(TCP_IF_NAMES, iface.name);
             if (idx < 0) continue;
             state_interfaces.emplace_back(hardware_interface::StateInterface(
@@ -554,6 +562,11 @@ namespace uf_robot_hardware
                     info_.gpios[0].name, iface.name, &tcp_speed_cmd_));
                 continue;
             }
+            if (iface.name == TCP_SERVO_IF_NAME) {
+                command_interfaces.emplace_back(hardware_interface::CommandInterface(
+                    info_.gpios[0].name, iface.name, &servo_cmd_));
+                continue;
+            }
             int idx = _index_of(TCP_IF_NAMES, iface.name);
             if (idx < 0) continue;
             command_interfaces.emplace_back(hardware_interface::CommandInterface(
@@ -590,10 +603,83 @@ namespace uf_robot_hardware
         // FT_CFG_FORCE.. are refreshed every read(), leave them alone here.
     }
 
+    bool UFRobotSystemHardware::_idle_for_mode_switch(void)
+    {
+        // set_mode() drops whatever is queued or moving, so only switch at rest.
+        if (xarm_driver_.arm->cmd_num != 0 || xarm_driver_.curr_state == 1) return false;
+        for (double v : velocity_states_) {
+            if (std::abs(v) > 0.01) return false;
+        }
+        return true;
+    }
+
+    // True while a switch is in flight or the arm is still reporting the old mode, so
+    // write() skips motion for the cycle.
+    bool UFRobotSystemHardware::_apply_servo_command(void)
+    {
+        rclcpp::Time now = node_->get_clock()->now();
+
+        if (servo_switch_future_.valid()) {
+            if (servo_switch_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                return true;
+            }
+            if (servo_switch_future_.get()) {
+                cartesian_servo_mode_ = servo_switch_target_;
+                // Resend the held command in the new mode on the next write.
+                for (int i = 0; i < 6; i++) prev_tcp_cmds_[i] = std::numeric_limits<double>::quiet_NaN();
+                prev_write_time_ = now;
+                servo_settle_until_ = now + rclcpp::Duration::from_seconds(2.0);
+                RCLCPP_INFO(LOGGER, "[%s] Switched to XARM_MODE::%s",
+                    robot_ip_.c_str(), cartesian_servo_mode_ ? "SERVO" : "POSE");
+            }
+        }
+
+        // The reported mode lags set_mode() by a few cycles.
+        int expected_mode = cartesian_servo_mode_ ? XARM_MODE::SERVO : XARM_MODE::POSE;
+        if (now < servo_settle_until_ && xarm_driver_.curr_mode != expected_mode) return true;
+
+        if (std::isnan(servo_cmd_)) return false;
+        bool want_servo = servo_cmd_ >= 0.5;
+        if (want_servo == cartesian_servo_mode_) return false;
+
+        if (now.seconds() - prev_servo_switch_time_.seconds() <= 1.0) return false;
+        prev_servo_switch_time_ = now;
+
+        if (want_servo && ft_armed_) {
+            RCLCPP_WARN(LOGGER, "[%s] Not switching to servo while force control is armed",
+                robot_ip_.c_str());
+            return false;
+        }
+        if (!_idle_for_mode_switch()) {
+            RCLCPP_INFO(LOGGER, "[%s] Waiting for the arm to stop before switching mode",
+                robot_ip_.c_str());
+            return false;
+        }
+
+        // set_mode() blocks for about a second, too long for the control loop.
+        servo_switch_target_ = want_servo;
+        servo_switch_future_ = std::async(std::launch::async, [this, want_servo]() {
+            int mode_ret = xarm_driver_.arm->set_mode(want_servo ? XARM_MODE::SERVO : XARM_MODE::POSE);
+            int state_ret = xarm_driver_.arm->set_state(XARM_STATE::START);
+            if (mode_ret != 0 || state_ret != 0) {
+                RCLCPP_ERROR(LOGGER, "[%s] Mode switch to %s failed, set_mode=%d set_state=%d",
+                    robot_ip_.c_str(), want_servo ? "SERVO" : "POSE", mode_ret, state_ret);
+                return false;
+            }
+            return true;
+        });
+        return true;
+    }
+
     bool UFRobotSystemHardware::_arm_ft(bool on)
     {
         if (on && !has_ft_sensor_) {
             RCLCPP_ERROR(LOGGER, "[%s] Refusing to arm force control: has_ft_sensor is false",
+                robot_ip_.c_str());
+            return false;
+        }
+        if (on && cartesian_servo_mode_) {
+            RCLCPP_ERROR(LOGGER, "[%s] Refusing to arm force control while in servo mode",
                 robot_ip_.c_str());
             return false;
         }
@@ -1027,6 +1113,8 @@ namespace uf_robot_hardware
         prev_write_time_ = node_->get_clock()->now();
         prev_rearm_time_ = prev_write_time_;
         prev_ft_retry_time_ = prev_write_time_;
+        servo_settle_until_ = prev_write_time_;
+        prev_servo_switch_time_ = prev_write_time_ - rclcpp::Duration::from_seconds(10.0);
 
         RCLCPP_INFO(LOGGER, "[%s] System Sucessfully started!", robot_ip_.c_str());
         return CallbackReturn::SUCCESS;
@@ -1074,6 +1162,7 @@ namespace uf_robot_hardware
         for (int i = 0; i < 3; i++) {
             ft_cfg_states_[FT_CFG_FORCE + i] = ft_states_[i];
         }
+        servo_state_ = (xarm_driver_.curr_mode == XARM_MODE::SERVO) ? 1.0 : 0.0;
         // double time_sec = joint_state_msg_->header.stamp.seconds() - start.seconds();
         // read_total_time_ += time_sec;
         // if (time_sec > read_max_time_) {
@@ -1118,6 +1207,9 @@ namespace uf_robot_hardware
         // has a full command queue. This issues no motion, and it is a no-op unless the
         // ft gpio actually changed.
         _apply_ft_commands();
+        if (_apply_servo_command()) {
+            return hardware_interface::return_type::OK;
+        }
 
         if (_handle_config_changed()) {
             return hardware_interface::return_type::OK;
