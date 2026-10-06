@@ -640,7 +640,13 @@ namespace uf_robot_hardware
 
         if (std::isnan(servo_cmd_)) return false;
         bool want_servo = servo_cmd_ >= 0.5;
-        if (want_servo == cartesian_servo_mode_) return false;
+        // Compare against what the arm reports, not what we last asked for: a fault can drop
+        // it back to POSE on its own.
+        bool arm_in_servo = xarm_driver_.curr_mode == XARM_MODE::SERVO;
+        if (want_servo == arm_in_servo) {
+            cartesian_servo_mode_ = want_servo;
+            return false;
+        }
 
         if (now.seconds() - prev_servo_switch_time_.seconds() <= 1.0) return false;
         prev_servo_switch_time_ = now;
