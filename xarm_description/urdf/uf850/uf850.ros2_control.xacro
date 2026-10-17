@@ -161,6 +161,10 @@
              tcp_speed param above in charge. Nothing reads a speed back, so there is no
              state counterpart. -->
         <command_interface name="speed"/>
+        <!-- Optional. 0 asks for POSE, 1 for SERVO, switched at runtime once the arm is
+             idle. Leave it NaN and the cartesian_servo_mode param stays in charge. The
+             state is the mode the arm reports. -->
+        <command_interface name="servo"/>
         <state_interface name="x">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -179,6 +183,9 @@
         <state_interface name="yaw">
           <param name="initial_value">0.0</param>
         </state_interface>
+        <state_interface name="servo">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </gpio>
 
       <!-- Runtime force control. enable toggles the onboard force loop, coord picks
@@ -186,10 +193,8 @@
            target in N or Nm. Vectors are one interface per element because
            ros2_control command interfaces are scalar doubles. Optional even in POSE
            mode: without this component the loop is still set from the launch params,
-           just not adjustable at runtime. Dropped entirely under cartesian_servo_mode,
-           since the onboard force control app does not run in XARM_MODE::SERVO, so there
-           is nothing here for it to command (ft_sensor below still reads the wrench). -->
-      <xacro:unless value="${cartesian_servo_mode}">
+           just not adjustable at runtime. Always declared, since the arm can switch to
+           servo at runtime, but enabling force control is refused while in SERVO. -->
       <gpio name="${prefix}ft">
         <command_interface name="enable"/>
         <command_interface name="coord"/>
@@ -224,7 +229,6 @@
           <param name="initial_value">0.0</param>
         </state_interface>
       </gpio>
-      </xacro:unless>
       <!-- End effector wrench, N and Nm. These interface names are what
            semantic_components::ForceTorqueSensor expects, so
            force_torque_sensor_broadcaster can claim them directly. -->

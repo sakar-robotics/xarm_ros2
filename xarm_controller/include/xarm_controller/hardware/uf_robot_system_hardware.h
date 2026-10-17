@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <thread>
+#include <future>
 #include <queue>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -84,6 +85,10 @@ namespace uf_robot_hardware
         // does not declare it, or a controller that never writes it, keeps the launch
         // time speed.
         double tcp_speed_cmd_;
+        // tcp/servo: 0 asks for POSE, 1 for SERVO, NaN leaves the launch param in charge.
+        // The state is the mode the arm reports.
+        double servo_cmd_;
+        double servo_state_;
 
         // End-effector force/torque, N and Nm, ordered fx fy fz tx ty tz
         std::vector<double> ft_states_;
@@ -157,6 +162,10 @@ namespace uf_robot_hardware
         rclcpp::Time prev_write_time_;
         rclcpp::Time prev_rearm_time_;
         rclcpp::Time prev_ft_retry_time_;
+        rclcpp::Time prev_servo_switch_time_;
+        rclcpp::Time servo_settle_until_;
+        std::future<bool> servo_switch_future_;
+        bool servo_switch_target_;
 
         std::shared_ptr<rclcpp::Node> node_;
         std::shared_ptr<rclcpp::Node> hw_node_;
@@ -186,6 +195,8 @@ namespace uf_robot_hardware
         // Push whatever the ft gpio command interfaces currently hold to the arm.
         // Called from write(); every call it makes is skipped unless something changed.
         void _apply_ft_commands(void);
+        bool _apply_servo_command(void);
+        bool _idle_for_mode_switch(void);
         // Switch the onboard force loop on or off. Returns true if the arm ended up in
         // the requested state.
         bool _arm_ft(bool on);
