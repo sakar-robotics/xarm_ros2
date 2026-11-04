@@ -49,11 +49,12 @@ namespace uf_robot_hardware
         hardware_interface::return_type read(const rclcpp::Time & time, const rclcpp::Duration &period) final;
         hardware_interface::return_type write(const rclcpp::Time & time, const rclcpp::Duration &period) final;
 
-        // hardware_interface::return_type prepare_command_mode_switch(const std::vector<std::string>& start_interfaces,
-        //                                                             const std::vector<std::string>& stop_interfaces) final;
+        // Joint commands and the tcp gpio can't be claimed together: the arm takes one or the other.
+        hardware_interface::return_type prepare_command_mode_switch(const std::vector<std::string>& start_interfaces,
+                                                                    const std::vector<std::string>& stop_interfaces) final;
 
-        // hardware_interface::return_type perform_command_mode_switch(const std::vector<std::string>& start_interfaces,
-        //                                                             const std::vector<std::string>& stop_interfaces) final;
+        hardware_interface::return_type perform_command_mode_switch(const std::vector<std::string>& start_interfaces,
+                                                                    const std::vector<std::string>& stop_interfaces) final;
 
     protected:
         hardware_interface::HardwareInfo info_;
@@ -137,6 +138,18 @@ namespace uf_robot_hardware
         float tcp_acc_;     // mm/s^2
         float tcp_radius_;  // mm, <0 disables blending
         int cmd_queue_max_; // skip write() when the controller cache is at least this deep
+
+        // Per-joint position commands (set_servo_angle_j in XARM_MODE::SERVO), opt-in in the URDF.
+        // Claimed by a joint controller; the tcp gpio is then off limits until it lets go.
+        bool has_joint_cmd_ = false;
+        bool joint_claimed_ = false;
+        bool tcp_claimed_ = false;
+        // The mode the launch params asked for, put back once a joint controller lets go.
+        bool default_servo_mode_ = false;
+        bool restore_mode_ = false;
+        // A joint command further than this from the measured joint is not sent, rad.
+        double joint_cmd_max_step_ = 0.1;
+        bool _write_joints(void);
 
         bool velocity_control_;
         // set_servo_cartesian()/XARM_MODE::SERVO instead of set_position()/XARM_MODE::POSE --

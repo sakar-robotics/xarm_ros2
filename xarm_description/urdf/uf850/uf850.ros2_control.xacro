@@ -3,6 +3,8 @@
   <xacro:macro name="uf850_ros2_control" params="prefix
     velocity_control:='false'
     cartesian_servo_mode:='false'
+    joint_command:='false'
+    joint_cmd_max_step:='0.1'
     ros2_control_plugin:='uf_robot_hardware/UFRobotSystemHardware'
     hw_ns:='xarm' add_gripper:='false' add_bio_gripper:='false'
     robot_ip:='' report_type:='normal' baud_checkset:='true' default_gripper_baud:=2000000
@@ -36,6 +38,7 @@
                Costs the ft gpio (force control needs XARM_MODE::POSE). false (default):
                set_position()/XARM_MODE::POSE, force-control-capable, unchanged. -->
           <param name="cartesian_servo_mode">${cartesian_servo_mode}</param>
+          <param name="joint_cmd_max_step">${joint_cmd_max_step}</param>
           <param name="prefix">P${prefix}</param>
           <param name="robot_ip">R${robot_ip}</param>
           <param name="report_type">${report_type}</param>
@@ -94,6 +97,7 @@
         <!-- <plugin>uf_robot_hardware/UFRobotSystemHardware</plugin> -->
       </hardware>
       <joint name="${prefix}joint1">
+        <xacro:if value="${joint_command}"><command_interface name="position"/></xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -103,6 +107,7 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint2">
+        <xacro:if value="${joint_command}"><command_interface name="position"/></xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -112,6 +117,7 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint3">
+        <xacro:if value="${joint_command}"><command_interface name="position"/></xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -121,6 +127,7 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint4">
+        <xacro:if value="${joint_command}"><command_interface name="position"/></xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -130,6 +137,7 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint5">
+        <xacro:if value="${joint_command}"><command_interface name="position"/></xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -139,6 +147,7 @@
         <!-- <state_interface name="effort"/> -->
       </joint>
       <joint name="${prefix}joint6">
+        <xacro:if value="${joint_command}"><command_interface name="position"/></xacro:if>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
