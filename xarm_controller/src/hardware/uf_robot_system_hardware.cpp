@@ -400,6 +400,16 @@ namespace uf_robot_hardware
 
         _init_ufactory_driver();
         _init_ft_params();
+        default_servo_mode_ = cartesian_servo_mode_;
+        joint_claimed_ = false;
+        tcp_claimed_ = false;
+        restore_mode_ = false;
+        {
+            auto step = info_.hardware_parameters.find("joint_cmd_max_step");
+            if (step != info_.hardware_parameters.end()) {
+                joint_cmd_max_step_ = std::stod(step->second);
+            }
+        }
 
         position_states_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
         velocity_states_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
@@ -423,8 +433,28 @@ namespace uf_robot_hardware
         has_ft_gpio_ = false;
         ft_iface_prefix_ = std::string();
 
-        // Joints are state only. The arm stays in XARM_MODE::POSE and is commanded
-        // through the Cartesian gpio component, so joints carry no command interface.
+        // Joints are state only unless the URDF gives them a position command interface, which
+        // joint controllers use through set_servo_angle_j(). The tcp gpio stays either way.
+        has_joint_cmd_ = false;
+        for (const hardware_interface::ComponentInfo & joint : info_.joints) {
+            for (const auto & iface : joint.command_interfaces) {
+                if (iface.name != hardware_interface::HW_IF_POSITION) {
+                    RCLCPP_ERROR(LOGGER, "[%s] Joint '%s' has a '%s' command interface, only position is supported",
+                        robot_ip_.c_str(), joint.name.c_str(), iface.name.c_str());
+                    return CallbackReturn::ERROR;
+                }
+                has_joint_cmd_ = true;
+            }
+        }
+        if (has_joint_cmd_) {
+            for (const hardware_interface::ComponentInfo & joint : info_.joints) {
+                if (joint.command_interfaces.empty()) {
+                    RCLCPP_ERROR(LOGGER, "[%s] Joint '%s' has no position command interface but others do",
+                        robot_ip_.c_str(), joint.name.c_str());
+                    return CallbackReturn::ERROR;
+                }
+            }
+        }
         for (const hardware_interface::ComponentInfo & joint : info_.joints) {
             bool has_pos_state_interface = false;
             for (auto i = 0u; i < joint.state_interfaces.size(); ++i) {
@@ -552,10 +582,15 @@ namespace uf_robot_hardware
 
     std::vector<hardware_interface::CommandInterface> UFRobotSystemHardware::export_command_interfaces()
     {
-        // Cartesian only. In XARM_MODE::POSE the arm takes queued planned motions
-        // (set_position), not the per cycle joint stream a trajectory controller emits,
-        // so no joint command interfaces are exported.
         std::vector<hardware_interface::CommandInterface> command_interfaces;
+        // Joint position commands, when the URDF declares them: the stream a joint trajectory
+        // controller emits goes to set_servo_angle_j() in XARM_MODE::SERVO.
+        if (has_joint_cmd_) {
+            for (std::size_t j = 0; j < info_.joints.size(); ++j) {
+                command_interfaces.emplace_back(hardware_interface::CommandInterface(
+                    info_.joints[j].name, hardware_interface::HW_IF_POSITION, &position_cmds_[j]));
+            }
+        }
         for (const auto & iface : info_.gpios[0].command_interfaces) {
             if (iface.name == TCP_SPEED_IF_NAME) {
                 command_interfaces.emplace_back(hardware_interface::CommandInterface(
@@ -603,6 +638,109 @@ namespace uf_robot_hardware
         // FT_CFG_FORCE.. are refreshed every read(), leave them alone here.
     }
 
+    // A controller taking the joints and one taking the tcp gpio would fight over the arm's one
+    // mode, so the second claim is refused.
+    hardware_interface::return_type UFRobotSystemHardware::prepare_command_mode_switch(
+        const std::vector<std::string>& start_interfaces, const std::vector<std::string>& stop_interfaces)
+    {
+        auto is_joint = [this](const std::string & name) {
+            for (const auto & joint : info_.joints) {
+                if (name.rfind(joint.name + "/", 0) == 0) return true;
+            }
+            return false;
+        };
+        auto is_tcp = [this](const std::string & name) {
+            return name.rfind(info_.gpios[0].name + "/", 0) == 0;
+        };
+        bool joints = joint_claimed_;
+        bool tcp = tcp_claimed_;
+        for (const auto & name : stop_interfaces) {
+            if (is_joint(name)) joints = false;
+            if (is_tcp(name)) tcp = false;
+        }
+        for (const auto & name : start_interfaces) {
+            if (is_joint(name)) joints = true;
+            if (is_tcp(name)) tcp = true;
+        }
+        if (joints && tcp) {
+            RCLCPP_ERROR(LOGGER, "[%s] Refusing to claim the joints and the tcp gpio together", robot_ip_.c_str());
+            return hardware_interface::return_type::ERROR;
+        }
+        if (joints && !joint_claimed_ && ft_armed_) {
+            RCLCPP_ERROR(LOGGER, "[%s] Refusing the joints while force control is armed", robot_ip_.c_str());
+            return hardware_interface::return_type::ERROR;
+        }
+        return hardware_interface::return_type::OK;
+    }
+
+    hardware_interface::return_type UFRobotSystemHardware::perform_command_mode_switch(
+        const std::vector<std::string>& start_interfaces, const std::vector<std::string>& stop_interfaces)
+    {
+        const bool was_joint = joint_claimed_;
+        auto touches = [](const std::vector<std::string> & names, const std::string & owner) {
+            for (const auto & name : names) {
+                if (name.rfind(owner + "/", 0) == 0) return true;
+            }
+            return false;
+        };
+        for (const auto & joint : info_.joints) {
+            if (touches(stop_interfaces, joint.name)) joint_claimed_ = false;
+        }
+        if (touches(stop_interfaces, info_.gpios[0].name)) tcp_claimed_ = false;
+        for (const auto & joint : info_.joints) {
+            if (touches(start_interfaces, joint.name)) joint_claimed_ = true;
+        }
+        if (touches(start_interfaces, info_.gpios[0].name)) tcp_claimed_ = true;
+
+        if (joint_claimed_ && !was_joint) {
+            // Start from where the arm is, and send the first command whatever it is.
+            for (std::size_t j = 0; j < position_cmds_.size(); ++j) position_cmds_[j] = position_states_[j];
+            for (int i = 0; i < 7; i++) prev_cmds_float_[i] = std::numeric_limits<float>::quiet_NaN();
+            RCLCPP_INFO(LOGGER, "[%s] Joint controller took the arm", robot_ip_.c_str());
+        }
+        if (!joint_claimed_ && was_joint) {
+            restore_mode_ = true;
+            // The tcp command buffer is stale; resend nothing until a controller writes it again.
+            for (int i = 0; i < 6; i++) prev_tcp_cmds_[i] = std::numeric_limits<double>::quiet_NaN();
+            RCLCPP_INFO(LOGGER, "[%s] Joint controller let go of the arm", robot_ip_.c_str());
+        }
+        return hardware_interface::return_type::OK;
+    }
+
+    bool UFRobotSystemHardware::_write_joints(void)
+    {
+        const std::size_t n = std::min<std::size_t>(position_cmds_.size(), 6);
+        for (std::size_t j = 0; j < n; ++j) {
+            const double cmd = position_cmds_[j];
+            if (!std::isfinite(cmd)) return false;
+            if (std::isfinite(position_states_[j]) && std::abs(cmd - position_states_[j]) > joint_cmd_max_step_) {
+                RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
+                    "[%s] Joint %zu command is %.3f rad from the arm, not sending", robot_ip_.c_str(), j + 1,
+                    cmd - position_states_[j]);
+                return false;
+            }
+            cmds_float_[j] = static_cast<float>(cmd);
+        }
+        for (std::size_t j = n; j < 7; ++j) cmds_float_[j] = 0.0F;
+
+        // Servo mode has a liveness timeout, so an unchanged target is still resent every second.
+        curr_write_time_ = node_->get_clock()->now();
+        const bool due = curr_write_time_.seconds() - prev_write_time_.seconds() > 1;
+        bool changed = false;
+        for (int i = 0; i < 7; i++) {
+            if (std::isnan(prev_cmds_float_[i]) || cmds_float_[i] != prev_cmds_float_[i]) changed = true;
+        }
+        if (!changed && !due) return true;
+        int ret = xarm_driver_.arm->set_servo_angle_j(cmds_float_, 0, 0, 0);
+        if (ret != 0) {
+            RCLCPP_WARN(LOGGER, "[%s] set_servo_angle_j, ret=%d", robot_ip_.c_str(), ret);
+            return false;
+        }
+        prev_write_time_ = curr_write_time_;
+        for (int i = 0; i < 7; i++) prev_cmds_float_[i] = cmds_float_[i];
+        return true;
+    }
+
     bool UFRobotSystemHardware::_idle_for_mode_switch(void)
     {
         // set_mode() drops whatever is queued or moving, so only switch at rest.
@@ -638,13 +776,24 @@ namespace uf_robot_hardware
         int expected_mode = cartesian_servo_mode_ ? XARM_MODE::SERVO : XARM_MODE::POSE;
         if (now < servo_settle_until_ && xarm_driver_.curr_mode != expected_mode) return true;
 
-        if (std::isnan(servo_cmd_)) return false;
-        bool want_servo = servo_cmd_ >= 0.5;
+        // The joints need SERVO. With the tcp gpio it is the servo command, or, after a joint
+        // controller lets go, the mode the launch asked for.
+        bool want_servo;
+        if (joint_claimed_) {
+            want_servo = true;
+        } else if (!std::isnan(servo_cmd_)) {
+            want_servo = servo_cmd_ >= 0.5;
+        } else if (restore_mode_) {
+            want_servo = default_servo_mode_;
+        } else {
+            return false;
+        }
         // Compare against what the arm reports, not what we last asked for: a fault can drop
         // it back to POSE on its own.
         bool arm_in_servo = xarm_driver_.curr_mode == XARM_MODE::SERVO;
         if (want_servo == arm_in_servo) {
             cartesian_servo_mode_ = want_servo;
+            if (!joint_claimed_) restore_mode_ = false;
             return false;
         }
 
@@ -1241,6 +1390,11 @@ namespace uf_robot_hardware
             return hardware_interface::return_type::OK;
         }
         if (xarm_driver_.arm->cmd_num >= cmd_queue_max_) {
+            return hardware_interface::return_type::OK;
+        }
+
+        if (joint_claimed_) {
+            _write_joints();
             return hardware_interface::return_type::OK;
         }
 
