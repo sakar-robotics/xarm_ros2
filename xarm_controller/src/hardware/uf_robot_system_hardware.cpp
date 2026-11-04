@@ -754,7 +754,8 @@ namespace uf_robot_hardware
         // set_mode() drops whatever is queued or moving, so only switch at rest.
         if (xarm_driver_.arm->cmd_num != 0 || xarm_driver_.curr_state == 1) return false;
         for (double v : velocity_states_) {
-            if (std::abs(v) > 0.01) return false;
+            // A velocity that isn't a number is not a reason to think the arm is still.
+            if (!std::isfinite(v) || std::abs(v) > 0.01) return false;
         }
         return true;
     }
