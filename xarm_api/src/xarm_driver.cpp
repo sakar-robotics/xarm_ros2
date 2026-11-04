@@ -451,7 +451,9 @@ namespace xarm_api
                 joint_state_msg_.effort[i] = (double)curr_effort[i];
             }
             else {
-                curr_velocity[i] = !initialized ? 0.0 : (curr_position[i] - prev_position[i]) / (curr_time.seconds() - prev_time.seconds());
+                // Two reads with the same stamp would divide by zero, so that sample reads as still.
+                const double dt = curr_time.seconds() - prev_time.seconds();
+                curr_velocity[i] = (!initialized || dt < 1e-6) ? 0.0 : (curr_position[i] - prev_position[i]) / dt;
                 joint_state_msg_.velocity[i] = (double)curr_velocity[i];
             }
         }
