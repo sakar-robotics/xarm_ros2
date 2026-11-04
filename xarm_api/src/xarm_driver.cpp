@@ -159,6 +159,11 @@ namespace xarm_api
         hw_node_ = node_->create_sub_node(hw_ns);
         node_->get_parameter_or("dof", dof_, 7);
         node_->get_parameter_or("report_type", report_type_, std::string("normal"));
+        // MMR: see xarm_driver.h for rationale. Off by default.
+        node_->get_parameter_or("force_legacy_joint_read", force_legacy_joint_read_, false);
+        if (force_legacy_joint_read_) {
+            RCLCPP_WARN(node_->get_logger(), "[%s] force_legacy_joint_read is enabled: using legacy get_servo_angle() joint read path", server_ip.c_str());
+        }
 
         node_->get_parameter_or("joint_names", joint_names_, 
         std::vector<std::string>({"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"}));
@@ -426,7 +431,10 @@ namespace xarm_api
             }
         }
 
-        bool use_new = _firmware_version_is_ge(1, 8, 103);
+        // MMR: force_legacy_joint_read overrides firmware-version-based selection
+        // when the connected controller's combined get_joint_states() response
+        // doesn't populate position correctly (see xarm_driver.h).
+        bool use_new = _firmware_version_is_ge(1, 8, 103) && !force_legacy_joint_read_;
         int ret;
         if (use_new)
             ret = arm->get_joint_states(curr_position, curr_velocity, curr_effort, num);
@@ -443,7 +451,9 @@ namespace xarm_api
                 joint_state_msg_.effort[i] = (double)curr_effort[i];
             }
             else {
-                curr_velocity[i] = !initialized ? 0.0 : (curr_position[i] - prev_position[i]) / (curr_time.seconds() - prev_time.seconds());
+                // Two reads with the same stamp would divide by zero, so that sample reads as still.
+                const double dt = curr_time.seconds() - prev_time.seconds();
+                curr_velocity[i] = (!initialized || dt < 1e-6) ? 0.0 : (curr_position[i] - prev_position[i]) / dt;
                 joint_state_msg_.velocity[i] = (double)curr_velocity[i];
             }
         }

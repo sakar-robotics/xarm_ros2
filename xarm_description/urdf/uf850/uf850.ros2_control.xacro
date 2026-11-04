@@ -9,6 +9,7 @@
     hw_ns:='xarm' add_gripper:='false' add_bio_gripper:='false'
     robot_ip:='' report_type:='normal' baud_checkset:='true' default_gripper_baud:=2000000
     has_ft_sensor:='true'
+    force_legacy_joint_read:='false'
     ft_sensor_mode:='0' ft_coord:='0'
     ft_c_axis:='1 0 0 0 1 0'
     ft_f_ref:='8 0 0 0 0 0'
@@ -42,6 +43,7 @@
           <param name="prefix">P${prefix}</param>
           <param name="robot_ip">R${robot_ip}</param>
           <param name="report_type">${report_type}</param>
+          <param name="force_legacy_joint_read">${force_legacy_joint_read}</param>
           <param name="dof">6</param>
           <param name="baud_checkset">${baud_checkset}</param>
           <param name="default_gripper_baud">${default_gripper_baud}</param>
