@@ -342,6 +342,14 @@ namespace uf_robot_hardware
         }
         node_->set_parameter(rclcpp::Parameter("baud_checkset", baud_checkset));
 
+        // The Studio simulator's combined joint query returns zero positions; see xarm_driver.cpp.
+        bool force_legacy_joint_read = false;
+        it = info_.hardware_parameters.find("force_legacy_joint_read");
+        if (it != info_.hardware_parameters.end()) {
+            force_legacy_joint_read = (it->second == "True" || it->second == "true");
+        }
+        node_->set_parameter(rclcpp::Parameter("force_legacy_joint_read", force_legacy_joint_read));
+
         bool add_gripper = true;
         it = info_.hardware_parameters.find("add_gripper");
         if (it != info_.hardware_parameters.end()) {
