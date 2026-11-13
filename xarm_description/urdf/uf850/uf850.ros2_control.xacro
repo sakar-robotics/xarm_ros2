@@ -16,6 +16,8 @@
     ft_kd:='0.05 0.05 0.05 0.05 0.05 0.05'
     ft_xe_limit:='200 200 200 0.1 0.1 0.1'
     ft_zero_on_activate:='true'
+    ft_collision_detection:='false' ft_collision_threshold:='30 30 30 4 4 4'
+    ft_collision_rebound:='false' ft_collision_reb_distance:='20 20 20 2 2 2'
     home_on_activate:='true' home_pose:='' home_joints:='45 0 0 0 90 0'
     home_speed:=100 home_acc:=1000 home_joint_speed:=20 home_joint_acc:=200
     tcp_speed:=200 tcp_acc:=2000 tcp_radius:=-1 cmd_queue_max:=16
@@ -60,6 +62,15 @@
           <param name="ft_kd">${ft_kd}</param>
           <param name="ft_xe_limit">${ft_xe_limit}</param>
           <param name="ft_zero_on_activate">${ft_zero_on_activate}</param>
+          <!-- The box's own F/T collision check, set on activation. Past ft_collision_threshold
+               (N N N Nm Nm Nm, from the sensor's last zero) on any axis it stops the arm, after
+               backing off ft_collision_reb_distance (mm mm mm deg deg deg) when
+               ft_collision_rebound is on. ft_collision_detection false leaves the arm's own
+               setting untouched. -->
+          <param name="ft_collision_detection">${ft_collision_detection}</param>
+          <param name="ft_collision_threshold">${ft_collision_threshold}</param>
+          <param name="ft_collision_rebound">${ft_collision_rebound}</param>
+          <param name="ft_collision_reb_distance">${ft_collision_reb_distance}</param>
           <!-- Homing runs on activation, before the force loop is armed.
                home_pose is x y z in mm then roll pitch yaw in deg; home_joints is
                joint angles in deg and is only used when home_pose is empty. -->
