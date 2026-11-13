@@ -1580,6 +1580,11 @@ namespace uf_robot_hardware
     bool UFRobotSystemHardware::_tcp_cmds_is_change(double threshold)
     {
         for (int i = 0; i < 6; i++) {
+            // NaN means resend, but nothing compares as changed against it. Only once a controller owns the command.
+            if (std::isnan(prev_tcp_cmds_[i])) {
+                if (tcp_claimed_) return true;
+                continue;
+            }
             if (std::abs(tcp_cmds_[i] - prev_tcp_cmds_[i]) > threshold) return true;
         }
         return false;
