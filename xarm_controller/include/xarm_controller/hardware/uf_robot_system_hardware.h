@@ -121,6 +121,13 @@ namespace uf_robot_hardware
         float ft_xe_limit_[6];
         bool ft_zero_on_activate_;
 
+        // The box's own F/T collision check (see _setup_ft_collision), separate from the
+        // current based collision detection and its set_collision_rebound.
+        bool ft_collision_detection_;
+        float ft_collision_threshold_[6];    // N N N Nm Nm Nm
+        bool ft_collision_rebound_;
+        float ft_collision_reb_distance_[6]; // mm mm mm rad rad rad
+
         // Homing, performed on activation before the force loop is armed
         bool home_on_activate_;
         bool has_home_pose_;
@@ -192,6 +199,7 @@ namespace uf_robot_hardware
         bool _parse_vecn(const std::string& str, float *out, int n);
         void _init_ft_params(void);
         int _setup_ft_sensor(void);
+        int _setup_ft_collision(void);
         // Push whatever the ft gpio command interfaces currently hold to the arm.
         // Called from write(); every call it makes is skipped unless something changed.
         void _apply_ft_commands(void);

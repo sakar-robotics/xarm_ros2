@@ -126,6 +126,14 @@ namespace uf_robot_hardware
         ft_c_axis_[4] = 1;
         ft_f_ref_[0] = 8.0;
 
+        // F/T collision check off unless asked, so the arm keeps whatever it already has.
+        ft_collision_detection_ = false;
+        ft_collision_rebound_ = false;
+        for (int i = 0; i < 6; i++) {
+            ft_collision_threshold_[i] = (i < 3) ? 30.0 : 4.0;
+            ft_collision_reb_distance_[i] = (i < 3) ? 20.0 : 2.0;
+        }
+
         auto str_param = [this](const std::string& name, std::string& out) -> bool {
             auto it = info_.hardware_parameters.find(name);
             if (it == info_.hardware_parameters.end()) return false;
@@ -178,6 +186,13 @@ namespace uf_robot_hardware
         vec6_param("ft_kd", ft_kd_);
         vec6_param("ft_xe_limit", ft_xe_limit_);
 
+        bool_param("ft_collision_detection", ft_collision_detection_);
+        bool_param("ft_collision_rebound", ft_collision_rebound_);
+        vec6_param("ft_collision_threshold", ft_collision_threshold_);
+        // Rebound distance is given in mm and deg, and kept in mm and rad.
+        vec6_param("ft_collision_reb_distance", ft_collision_reb_distance_);
+        for (int i = 3; i < 6; i++) ft_collision_reb_distance_[i] = (float)(ft_collision_reb_distance_[i] * DEG_TO_RAD);
+
         float c_axis[6];
         for (int i = 0; i < 6; i++) c_axis[i] = (float)ft_c_axis_[i];
         vec6_param("ft_c_axis", c_axis);
@@ -227,6 +242,15 @@ namespace uf_robot_hardware
         RCLCPP_INFO(LOGGER, "[%s] ft_xe_limit: [%.3f %.3f %.3f %.3f %.3f %.3f]",
             robot_ip_.c_str(), ft_xe_limit_[0], ft_xe_limit_[1], ft_xe_limit_[2],
             ft_xe_limit_[3], ft_xe_limit_[4], ft_xe_limit_[5]);
+        RCLCPP_INFO(LOGGER, "[%s] ft_collision_detection: %d, ft_collision_threshold: [%.1f %.1f %.1f %.2f %.2f %.2f], "
+            "ft_collision_rebound: %d, ft_collision_reb_distance: [%.1f %.1f %.1f mm, %.2f %.2f %.2f deg]",
+            robot_ip_.c_str(), ft_collision_detection_,
+            ft_collision_threshold_[0], ft_collision_threshold_[1], ft_collision_threshold_[2],
+            ft_collision_threshold_[3], ft_collision_threshold_[4], ft_collision_threshold_[5],
+            ft_collision_rebound_,
+            ft_collision_reb_distance_[0], ft_collision_reb_distance_[1], ft_collision_reb_distance_[2],
+            ft_collision_reb_distance_[3] / DEG_TO_RAD, ft_collision_reb_distance_[4] / DEG_TO_RAD,
+            ft_collision_reb_distance_[5] / DEG_TO_RAD);
         RCLCPP_INFO(LOGGER, "[%s] home_on_activate: %d, has_home_pose: %d, has_home_joints: %d",
             robot_ip_.c_str(), home_on_activate_, has_home_pose_, has_home_joints_);
         RCLCPP_INFO(LOGGER, "[%s] tcp_speed: %.1f mm/s (fallback; a '%s' command interface overrides it per motion), tcp_acc: %.1f mm/s^2, tcp_radius: %.1f mm",
@@ -926,6 +950,81 @@ namespace uf_robot_hardware
         return 0;
     }
 
+    int UFRobotSystemHardware::_setup_ft_collision(void)
+    {
+        // The box's own F/T collision check: past ft_collision_threshold on any axis (from the
+        // sensor's last zero) it stops the arm, and with ft_collision_rebound it first backs
+        // off by ft_collision_reb_distance. It runs on the controller, so it holds
+        // whatever ROS is doing. Off leaves the arm's setting alone rather than writing 0, the
+        // same as every other F/T call this class skips.
+        if (!ft_collision_detection_) return 0;
+
+        // The SDK's ranges. Outside them the box would refuse or clamp, either way not the
+        // cutoff that was asked for.
+        for (int i = 0; i < 6; i++) {
+            bool force = i < 3;
+            float thr = ft_collision_threshold_[i];
+            float dist = force ? ft_collision_reb_distance_[i] : (float)(ft_collision_reb_distance_[i] / DEG_TO_RAD);
+            bool thr_ok = force ? (thr >= 5.0 && thr <= 200.0) : (thr >= 0.1 && thr <= 4.0);
+            bool dist_ok = force ? (dist >= 2.0 && dist <= 500.0) : (dist >= 0.2 && dist <= 50.0);
+            if (!thr_ok || (ft_collision_rebound_ && !dist_ok)) {
+                RCLCPP_ERROR(LOGGER, "[%s] F/T COLLISION CUTOFF IS NOT ACTIVE: axis %d is out of range"
+                    " (threshold %.2f in [5, 200] N or [0.1, 4] Nm, rebound distance %.2f in [2, 500] mm or [0.2, 50] deg)",
+                    robot_ip_.c_str(), i, thr, dist);
+                return -1;
+            }
+        }
+
+        // These go straight to the box, without the _check_code the other setters get, so
+        // the same codes it lets through (a latched error or warning on the arm) count as sent.
+        auto sent = [](int ret) { return ret == 0 || ret == UXBUS_STATE::ERR_CODE || ret == UXBUS_STATE::WAR_CODE; };
+        int rets[4] = {
+            xarm_driver_.arm->set_ft_collision_threshold(ft_collision_threshold_),
+            ft_collision_rebound_ ? xarm_driver_.arm->set_ft_collision_reb_distance(ft_collision_reb_distance_) : 0,
+            xarm_driver_.arm->set_ft_collision_rebound(ft_collision_rebound_ ? 1 : 0),
+            xarm_driver_.arm->set_ft_collision_detection(1),
+        };
+        for (int ret : rets) {
+            if (!sent(ret)) {
+                RCLCPP_ERROR(LOGGER, "[%s] F/T COLLISION CUTOFF IS NOT ACTIVE: the box refused it, rets %d %d %d %d"
+                    " (7 or 10 here usually means its firmware has no F/T collision check)",
+                    robot_ip_.c_str(), rets[0], rets[1], rets[2], rets[3]);
+                return ret;
+            }
+        }
+
+        // Read it back rather than trusting the sends.
+        int on = -1, reb = -1;
+        float thr[6] = {0}, dist[6] = {0};
+        int got[4] = {
+            xarm_driver_.arm->get_ft_collision_detection(&on),
+            xarm_driver_.arm->get_ft_collision_rebound(&reb),
+            xarm_driver_.arm->get_ft_collision_threshold(thr),
+            xarm_driver_.arm->get_ft_collision_reb_distance(dist),
+        };
+        RCLCPP_INFO(LOGGER, "[%s] ft collision readback: detection=%d, rebound=%d, threshold=[%.1f %.1f %.1f %.2f %.2f %.2f],"
+            " reb_distance=[%.1f %.1f %.1f mm, %.2f %.2f %.2f deg] (rets %d %d %d %d)",
+            robot_ip_.c_str(), on, reb, thr[0], thr[1], thr[2], thr[3], thr[4], thr[5],
+            dist[0], dist[1], dist[2], dist[3] / DEG_TO_RAD, dist[4] / DEG_TO_RAD, dist[5] / DEG_TO_RAD,
+            got[0], got[1], got[2], got[3]);
+        bool matches = sent(got[0]) && sent(got[2]) && on == 1;
+        for (int i = 0; i < 6; i++) {
+            matches = matches && std::fabs(thr[i] - ft_collision_threshold_[i]) <= 0.01;
+        }
+        if (ft_collision_rebound_) {
+            matches = matches && sent(got[1]) && reb == 1;
+        }
+        if (!matches) {
+            RCLCPP_ERROR(LOGGER, "[%s] F/T COLLISION CUTOFF IS NOT ACTIVE: the box does not read back what was set",
+                robot_ip_.c_str());
+            return -1;
+        }
+
+        RCLCPP_INFO(LOGGER, "[%s] F/T collision cutoff on: %.1f %.1f %.1f N, %.2f %.2f %.2f Nm, rebound %s",
+            robot_ip_.c_str(), thr[0], thr[1], thr[2], thr[3], thr[4], thr[5], ft_collision_rebound_ ? "on" : "off");
+        return 0;
+    }
+
     CallbackReturn UFRobotSystemHardware::on_activate(const rclcpp_lifecycle::State& previous_state)
     {
         req_list_controller_ = std::make_shared<controller_manager_msgs::srv::ListControllers::Request>();
@@ -1090,6 +1189,11 @@ namespace uf_robot_hardware
         else {
             RCLCPP_INFO(LOGGER, "[%s] has_ft_sensor is false, skipping every F/T SDK call",
                 robot_ip_.c_str());
+        }
+        // After the sensor is enabled on either branch above. A failure is logged and the stack
+        // left up, as with force control: the wrench still publishes while the cause is fixed.
+        if (has_ft_sensor_) {
+            _setup_ft_collision();
         }
 
         ft_armed_ = ft_sensor_mode_ != 0;
