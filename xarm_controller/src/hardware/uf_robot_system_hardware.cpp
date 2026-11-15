@@ -685,6 +685,7 @@ namespace uf_robot_hardware
         const std::vector<std::string>& start_interfaces, const std::vector<std::string>& stop_interfaces)
     {
         const bool was_joint = joint_claimed_;
+        const bool was_tcp = tcp_claimed_;
         auto touches = [](const std::vector<std::string> & names, const std::string & owner) {
             for (const auto & name : names) {
                 if (name.rfind(owner + "/", 0) == 0) return true;
@@ -711,6 +712,15 @@ namespace uf_robot_hardware
             // The tcp command buffer is stale; resend nothing until a controller writes it again.
             for (int i = 0; i < 6; i++) prev_tcp_cmds_[i] = std::numeric_limits<double>::quiet_NaN();
             RCLCPP_INFO(LOGGER, "[%s] Joint controller let go of the arm", robot_ip_.c_str());
+        }
+        if (tcp_claimed_ && !was_tcp) {
+            // Hold where the arm is. write() can run right after this switch, before the new
+            // controller's first update(), and would otherwise send whatever pose the buffer still
+            // held from before a joint move: a straight-line jump back across it (C24, speed
+            // exceeds limit). NaN states stay NaN, and _tcp_cmd_is_valid() then sends nothing.
+            for (int i = 0; i < 6; i++) tcp_cmds_[i] = tcp_states_[i];
+            RCLCPP_INFO(LOGGER, "[%s] TCP controller took the arm, holding [%.3f %.3f %.3f] m",
+                robot_ip_.c_str(), tcp_cmds_[0], tcp_cmds_[1], tcp_cmds_[2]);
         }
         return hardware_interface::return_type::OK;
     }
