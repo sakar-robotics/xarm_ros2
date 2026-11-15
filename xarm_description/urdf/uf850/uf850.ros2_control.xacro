@@ -65,8 +65,9 @@
           <!-- The box's own F/T collision check, set on activation. Past ft_collision_threshold
                (N N N Nm Nm Nm, from the sensor's last zero) on any axis it stops the arm, after
                backing off ft_collision_reb_distance (mm mm mm deg deg deg) when
-               ft_collision_rebound is on. ft_collision_detection false leaves the arm's own
-               setting untouched. -->
+               ft_collision_rebound is on. ft_collision_detection false writes it off, so a
+               cutoff an earlier launch left on doesn't linger; true and it can't be set fails
+               activation. -->
           <param name="ft_collision_detection">${ft_collision_detection}</param>
           <param name="ft_collision_threshold">${ft_collision_threshold}</param>
           <param name="ft_collision_rebound">${ft_collision_rebound}</param>
