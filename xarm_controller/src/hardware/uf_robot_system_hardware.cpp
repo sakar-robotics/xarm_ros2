@@ -986,16 +986,18 @@ namespace uf_robot_hardware
         };
 
         // The SDK's ranges. Outside them the box would refuse or clamp, either way not the
-        // cutoff that was asked for.
+        // cutoff that was asked for. Exactly 0 turns that one axis off (detection for a
+        // threshold, rebound for a distance), as UFactory Studio's F/T collision page has it.
         for (int i = 0; i < 6; i++) {
             bool force = i < 3;
             float thr = ft_collision_threshold_[i];
             float dist = force ? ft_collision_reb_distance_[i] : (float)(ft_collision_reb_distance_[i] / DEG_TO_RAD);
-            bool thr_ok = force ? (thr >= 5.0 && thr <= 200.0) : (thr >= 0.1 && thr <= 4.0);
-            bool dist_ok = force ? (dist >= 2.0 && dist <= 500.0) : (dist >= 0.2 && dist <= 50.0);
+            bool thr_ok = thr == 0.0f || (force ? (thr >= 5.0 && thr <= 200.0) : (thr >= 0.1 && thr <= 4.0));
+            bool dist_ok = dist == 0.0f || (force ? (dist >= 2.0 && dist <= 500.0) : (dist >= 0.2 && dist <= 50.0));
             if (!thr_ok || (ft_collision_rebound_ && !dist_ok)) {
                 RCLCPP_ERROR(LOGGER, "[%s] axis %d is out of range (threshold %.2f in [5, 200] N or [0.1, 4] Nm,"
-                    " rebound distance %.2f in [2, 500] mm or [0.2, 50] deg)", robot_ip_.c_str(), i, thr, dist);
+                    " rebound distance %.2f in [2, 500] mm or [0.2, 50] deg; 0 turns the axis off)",
+                    robot_ip_.c_str(), i, thr, dist);
                 return fail("a value is out of range");
             }
         }
@@ -1042,7 +1044,7 @@ namespace uf_robot_hardware
             return fail("detection did not go on");
         }
 
-        RCLCPP_INFO(LOGGER, "[%s] F/T collision cutoff on: %.1f %.1f %.1f N, %.2f %.2f %.2f Nm, rebound %s",
+        RCLCPP_INFO(LOGGER, "[%s] F/T collision cutoff on: %.1f %.1f %.1f N, %.2f %.2f %.2f Nm (0: that axis off), rebound %s",
             robot_ip_.c_str(), thr[0], thr[1], thr[2], thr[3], thr[4], thr[5], ft_collision_rebound_ ? "on" : "off");
         return 0;
     }
