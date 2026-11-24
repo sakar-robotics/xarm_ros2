@@ -8,6 +8,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
 #include <sstream>
 #include <thread>
 
@@ -653,8 +656,14 @@ namespace uf_robot_hardware
                 for (int i = 0; i < 6; i++) prev_tcp_cmds_[i] = std::numeric_limits<double>::quiet_NaN();
                 prev_write_time_ = now;
                 servo_settle_until_ = now + rclcpp::Duration::from_seconds(2.0);
-                RCLCPP_INFO(LOGGER, "[%s] Switched to XARM_MODE::%s",
-                    robot_ip_.c_str(), cartesian_servo_mode_ ? "SERVO" : "POSE");
+                const double done = now.seconds();
+                RCLCPP_INFO(LOGGER,
+                    "[%s] Switched to XARM_MODE::%s in %.0f ms (%.0f ms waiting for the 1 s gate and "
+                    "the arm at rest, %.0f ms in set_mode/set_state)",
+                    robot_ip_.c_str(), cartesian_servo_mode_ ? "SERVO" : "POSE",
+                    (done - mode_wanted_since_) * 1000.0,
+                    (servo_switch_started_at_ - mode_wanted_since_) * 1000.0,
+                    (done - servo_switch_started_at_) * 1000.0);
             }
         }
 
@@ -669,8 +678,10 @@ namespace uf_robot_hardware
         bool arm_in_servo = xarm_driver_.curr_mode == XARM_MODE::SERVO;
         if (want_servo == arm_in_servo) {
             cartesian_servo_mode_ = want_servo;
+            mode_wanted_since_ = -1.0;
             return false;
         }
+        if (mode_wanted_since_ < 0.0) mode_wanted_since_ = now.seconds();
 
         if (now.seconds() - prev_servo_switch_time_.seconds() <= 1.0) return false;
         prev_servo_switch_time_ = now;
@@ -688,6 +699,7 @@ namespace uf_robot_hardware
 
         // set_mode() blocks for about a second, too long for the control loop.
         servo_switch_target_ = want_servo;
+        servo_switch_started_at_ = now.seconds();
         servo_switch_future_ = std::async(std::launch::async, [this, want_servo]() {
             int mode_ret = xarm_driver_.arm->set_mode(want_servo ? XARM_MODE::SERVO : XARM_MODE::POSE);
             int state_ret = xarm_driver_.arm->set_state(XARM_STATE::START);
@@ -699,6 +711,47 @@ namespace uf_robot_hardware
             return true;
         });
         return true;
+    }
+
+    void UFRobotSystemHardware::_trace_cycle(const WriteTrace & trace)
+    {
+        const double now = node_->now().seconds();
+        // Look for the flag file once a second; flush on the same beat.
+        if (now - trace_polled_at_ >= 1.0) {
+            trace_polled_at_ = now;
+            const bool wanted = std::filesystem::exists("/tmp/mmr_servo_trace.enable");
+            if (wanted && !trace_file_.is_open()) {
+                char name[64];
+                std::time_t wall = std::time(nullptr);
+                std::strftime(name, sizeof(name), "/tmp/mmr_servo_trace_%Y%m%d_%H%M%S.csv", std::localtime(&wall));
+                trace_file_.open(name);
+                trace_file_ << "t,dt_ms,mode,servo,state,err,cmd_num,sent,why,ret,"
+                               "cx,cy,cz,cr,cp,cyaw,mx,my,mz,mr,mp,myaw,j1,j2,j3,j4,j5,j6\n";
+                RCLCPP_INFO(LOGGER, "[%s] servo trace on: %s", robot_ip_.c_str(), name);
+            }
+            else if (!wanted && trace_file_.is_open()) {
+                trace_file_.close();
+                RCLCPP_INFO(LOGGER, "[%s] servo trace off", robot_ip_.c_str());
+            }
+            else if (trace_file_.is_open()) {
+                trace_file_.flush();
+            }
+        }
+        if (!trace_file_.is_open()) {
+            trace_prev_write_at_ = now;
+            return;
+        }
+        trace_file_ << std::fixed << std::setprecision(4) << now << ','
+                    << std::setprecision(2) << (now - trace_prev_write_at_) * 1000.0 << ','
+                    << xarm_driver_.curr_mode << ',' << (cartesian_servo_mode_ ? 1 : 0) << ','
+                    << xarm_driver_.curr_state << ',' << xarm_driver_.curr_err << ','
+                    << xarm_driver_.arm->cmd_num << ',' << trace.sent << ',' << trace.why << ','
+                    << trace.ret << std::setprecision(5);
+        for (int i = 0; i < 6; i++) trace_file_ << ',' << tcp_cmds_[i];
+        for (int i = 0; i < 6; i++) trace_file_ << ',' << tcp_states_[i];
+        for (int i = 0; i < 6 && i < (int)position_states_.size(); i++) trace_file_ << ',' << position_states_[i];
+        trace_file_ << '\n';
+        trace_prev_write_at_ = now;
     }
 
     bool UFRobotSystemHardware::_arm_ft(bool on)
@@ -1340,20 +1393,32 @@ namespace uf_robot_hardware
 
     hardware_interface::return_type UFRobotSystemHardware::write(const rclcpp::Time & time, const rclcpp::Duration &period)
     {
+        WriteTrace trace;
+        const auto result = _write_impl(time, period, trace);
+        _trace_cycle(trace);
+        return result;
+    }
+
+    hardware_interface::return_type UFRobotSystemHardware::_write_impl(
+        const rclcpp::Time & time, const rclcpp::Duration & period, WriteTrace & trace)
+    {
         // Ahead of every early return below. Disarming the force loop is the stop
         // button, so it must reach the arm even when the arm is not ready, is paused, or
         // has a full command queue. This issues no motion, and it is a no-op unless the
         // ft gpio actually changed.
         _apply_ft_commands();
         if (_apply_servo_command()) {
+            trace.why = "servo_switch";
             return hardware_interface::return_type::OK;
         }
 
         if (_handle_config_changed()) {
+            trace.why = "config_changed";
             return hardware_interface::return_type::OK;
         }
 
         if (_need_reset()) {
+            trace.why = "need_reset";
             initialized_ = false;
             _deactivate_controller();
             return hardware_interface::return_type::OK;
@@ -1370,9 +1435,11 @@ namespace uf_robot_hardware
         // and neither has a setter, so both conditions are screened out here rather than
         // stalling the control loop.
         if (xarm_driver_.curr_state == 3) {
+            trace.why = "paused";
             return hardware_interface::return_type::OK;
         }
         if (xarm_driver_.arm->cmd_num >= cmd_queue_max_) {
+            trace.why = "queue_full";
             return hardware_interface::return_type::OK;
         }
 
@@ -1396,7 +1463,11 @@ namespace uf_robot_hardware
         curr_write_time_ = node_->get_clock()->now();
         bool servo_heartbeat_due = cartesian_servo_mode_
             && curr_write_time_.seconds() - prev_write_time_.seconds() > 1;
-        if (_tcp_cmd_is_valid() && (_tcp_cmds_is_change() || servo_heartbeat_due)) {
+        const bool cmd_valid = _tcp_cmd_is_valid();
+        const bool cmd_changed = cmd_valid && _tcp_cmds_is_change();
+        if (cmd_valid && (cmd_changed || servo_heartbeat_due)) {
+            trace.sent = 1;
+            trace.why = cmd_changed ? "changed" : "heartbeat";
             fp32 pose[6];
             for (int i = 0; i < 6; i++) {
                 pose[i] = (float)((i < 3) ? tcp_cmds_[i] * 1000.0 : tcp_cmds_[i]);
@@ -1418,6 +1489,7 @@ namespace uf_robot_hardware
                 // queued motion, and blocking here would stall the control loop.
                 cmd_ret = xarm_driver_.arm->set_position(pose, tcp_radius_, tcp_speed_, tcp_acc_, 0, false);
             }
+            trace.ret = cmd_ret;
             if (cmd_ret != 0) {
                 RCLCPP_WARN(LOGGER, "[%s] %s, ret=%d", robot_ip_.c_str(),
                     cartesian_servo_mode_ ? "set_servo_cartesian" : "set_position", cmd_ret);
@@ -1426,6 +1498,9 @@ namespace uf_robot_hardware
                 prev_write_time_ = curr_write_time_;
                 for (int i = 0; i < 6; i++) prev_tcp_cmds_[i] = tcp_cmds_[i];
             }
+        }
+        else {
+            trace.why = cmd_valid ? "unchanged" : "invalid_cmd";
         }
 
         return hardware_interface::return_type::OK;

@@ -10,6 +10,7 @@
 #define __UF_ROBOT_SYSTEM_HARDWARE_INTERFACE_H__
 
 #include <vector>
+#include <fstream>
 #include <thread>
 #include <future>
 #include <queue>
@@ -173,6 +174,25 @@ namespace uf_robot_hardware
         rclcpp::Time servo_settle_until_;
         std::future<bool> servo_switch_future_;
         bool servo_switch_target_;
+
+        // Per-cycle servo trace for judging jog smoothness: a CSV row per write() cycle while
+        // /tmp/mmr_servo_trace.enable exists (touch it to start, remove it to stop).
+        struct WriteTrace
+        {
+            int sent = 0;
+            const char * why = "none";
+            int ret = 0;
+        };
+        std::ofstream trace_file_;
+        double trace_polled_at_ = 0.0;
+        double trace_prev_write_at_ = 0.0;
+        // When the arm was first found in the wrong mode for what was asked, and when the switch
+        // call started, seconds (< 0: not waiting). For the timing in the "Switched" log line.
+        double mode_wanted_since_ = -1.0;
+        double servo_switch_started_at_ = 0.0;
+        hardware_interface::return_type _write_impl(
+            const rclcpp::Time & time, const rclcpp::Duration & period, WriteTrace & trace);
+        void _trace_cycle(const WriteTrace & trace);
 
         std::shared_ptr<rclcpp::Node> node_;
         std::shared_ptr<rclcpp::Node> hw_node_;
