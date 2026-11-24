@@ -1416,7 +1416,7 @@ namespace uf_robot_hardware
             } else {
                 // (pose, radius, speed, acc, mvtime, wait). wait stays false: this is a
                 // queued motion, and blocking here would stall the control loop.
-                cmd_ret = xarm_driver_.arm->set_position(pose, tcp_radius_, tcp_speed_, tcp_acc_, 0, false);
+                cmd_ret = xarm_driver_.arm->set_position(pose, tcp_radius_, speed, tcp_acc_, 0, false);
             }
             if (cmd_ret != 0) {
                 RCLCPP_WARN(LOGGER, "[%s] %s, ret=%d", robot_ip_.c_str(),
