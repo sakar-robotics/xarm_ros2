@@ -190,6 +190,21 @@ namespace uf_robot_hardware
         // call started, seconds (< 0: not waiting). For the timing in the "Switched" log line.
         double mode_wanted_since_ = -1.0;
         double servo_switch_started_at_ = 0.0;
+        // Nothing commanded before a fault or an e-stop may reach the arm: the TCP command follows
+        // the arm while it is not ready, and is held back after it until the controller starts from it.
+        bool command_guard_ = false;
+        double command_guard_since_ = 0.0;
+        // A servo command farther from the arm than this is refused.
+        float servo_max_jump_mm_ = 300.0;
+        float servo_max_jump_deg_ = 45.0;
+        double jump_refused_since_ = -1.0;  // seconds, < 0: nothing is being refused
+        // What _deactivate_controller() switched off, asked back on until it is active (the call can
+        // time out inside the loop that makes it).
+        std::vector<std::string> deactivated_controllers_;
+        double next_reactivate_attempt_ = 0.0;
+        void _reseed_tcp_commands(void);
+        void _flush_after_recovery(void);
+        void _command_gap(double & pos_m, double & rot_rad);
         hardware_interface::return_type _write_impl(
             const rclcpp::Time & time, const rclcpp::Duration & period, WriteTrace & trace);
         void _trace_cycle(const WriteTrace & trace);
@@ -242,7 +257,7 @@ namespace uf_robot_hardware
         bool _need_reset(void);
 
         void _deactivate_controller(void);
-        void _activate_controller(void);
+        bool _activate_controller(void);
 
         void _init_ufactory_driver(void);
 

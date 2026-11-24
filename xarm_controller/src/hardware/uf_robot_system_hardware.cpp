@@ -181,6 +181,8 @@ namespace uf_robot_hardware
         float_param("tcp_speed", tcp_speed_);
         float_param("tcp_acc", tcp_acc_);
         float_param("tcp_radius", tcp_radius_);
+        float_param("servo_max_jump_mm", servo_max_jump_mm_);
+        float_param("servo_max_jump_deg", servo_max_jump_deg_);
 
         vec6_param("ft_f_ref", ft_f_ref_);
         vec6_param("ft_limits", ft_limits_);
@@ -683,6 +685,9 @@ namespace uf_robot_hardware
         }
         if (mode_wanted_since_ < 0.0) mode_wanted_since_ = now.seconds();
 
+        // Switching mode on a faulted arm starts the error loop: switch back, old command, fault.
+        if (xarm_driver_.curr_err != 0) return false;
+
         if (now.seconds() - prev_servo_switch_time_.seconds() <= 1.0) return false;
         prev_servo_switch_time_ = now;
 
@@ -711,6 +716,61 @@ namespace uf_robot_hardware
             return true;
         });
         return true;
+    }
+
+    void UFRobotSystemHardware::_reseed_tcp_commands(void)
+    {
+        // A NaN buffer is deliberate (no starting pose, motion disabled): leave it.
+        if (std::isnan(tcp_cmds_[0])) return;
+        for (int i = 0; i < 6; i++) {
+            tcp_cmds_[i] = tcp_states_[i];
+            prev_tcp_cmds_[i] = tcp_states_[i];
+        }
+    }
+
+    // How far the command buffer is from the arm's reported pose: metres, and the angle of the
+    // rotation between the two orientations, radians.
+    void UFRobotSystemHardware::_command_gap(double & pos_m, double & rot_rad)
+    {
+        pos_m = 0.0;
+        rot_rad = 0.0;
+        if (std::isnan(tcp_cmds_[0])) return;
+        pos_m = std::sqrt(std::pow(tcp_cmds_[0] - tcp_states_[0], 2) +
+            std::pow(tcp_cmds_[1] - tcp_states_[1], 2) + std::pow(tcp_cmds_[2] - tcp_states_[2], 2));
+        // As rotations, not angle by angle: at pitch +-90 deg (the tool facing the wall) roll and
+        // yaw are degenerate, and the same orientation can be written as very different triples.
+        auto matrix = [](double r, double p, double y, double m[9]) {
+            const double cr = std::cos(r), sr = std::sin(r), cp = std::cos(p), sp = std::sin(p);
+            const double cy = std::cos(y), sy = std::sin(y);
+            m[0] = cy * cp; m[1] = cy * sp * sr - sy * cr; m[2] = cy * sp * cr + sy * sr;
+            m[3] = sy * cp; m[4] = sy * sp * sr + cy * cr; m[5] = sy * sp * cr - cy * sr;
+            m[6] = -sp;     m[7] = cp * sr;                m[8] = cp * cr;
+        };
+        double a[9], b[9];
+        matrix(tcp_cmds_[3], tcp_cmds_[4], tcp_cmds_[5], a);
+        matrix(tcp_states_[3], tcp_states_[4], tcp_states_[5], b);
+        double trace = 0.0;  // trace(a^T b)
+        for (int i = 0; i < 9; i++) trace += a[i] * b[i];
+        rot_rad = std::acos(std::min(1.0, std::max(-1.0, (trace - 1.0) / 2.0)));
+    }
+
+    // The arm is ready: clear its queue and the command buffer, and hold sends until the
+    // controllers start from the arm's pose.
+    void UFRobotSystemHardware::_flush_after_recovery(void)
+    {
+        if (xarm_driver_.arm->cmd_num > 0) {
+            const int queued = xarm_driver_.arm->cmd_num;
+            const int stop_ret = xarm_driver_.arm->set_state(XARM_STATE::STOP);
+            const int start_ret = xarm_driver_.arm->set_state(XARM_STATE::START);
+            RCLCPP_WARN(LOGGER, "[%s] %d command(s) were still queued on the arm: stopped and cleared "
+                "(set_state STOP=%d, START=%d)", robot_ip_.c_str(), queued, stop_ret, start_ret);
+        }
+        _reseed_tcp_commands();
+        prev_write_time_ = node_->get_clock()->now();
+        command_guard_ = true;
+        command_guard_since_ = node_->now().seconds();
+        RCLCPP_INFO(LOGGER, "[%s] Ready: commands from before are cleared, the command starts "
+            "from the arm's pose", robot_ip_.c_str());
     }
 
     void UFRobotSystemHardware::_trace_cycle(const WriteTrace & trace)
@@ -1373,6 +1433,8 @@ namespace uf_robot_hardware
                     position_cmds_[i] = position_states_[i];
                     velocity_cmds_[i] = 0.0;
                 }
+                // The TCP command too, or the target from before the fault goes out again.
+                _reseed_tcp_commands();
             }
         }
         else {
@@ -1423,11 +1485,24 @@ namespace uf_robot_hardware
             _deactivate_controller();
             return hardware_interface::return_type::OK;
         }
+        const bool was_initialized = initialized_;
         initialized_ = true;
-        if(reactivate_controller_later_)
-        {
-            _activate_controller();
-            reactivate_controller_later_ = false;
+        if (!was_initialized) {
+            _flush_after_recovery();
+        }
+        if (reactivate_controller_later_) {
+            const double now_s = node_->now().seconds();
+            if (now_s >= next_reactivate_attempt_) {
+                if (_activate_controller()) {
+                    reactivate_controller_later_ = false;
+                    RCLCPP_INFO(LOGGER, "[%s] The controllers are active again", robot_ip_.c_str());
+                }
+                else {
+                    next_reactivate_attempt_ = node_->now().seconds() + 1.0;
+                    RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
+                        "[%s] The controllers are not active yet: asking again", robot_ip_.c_str());
+                }
+            }
         }
         // set_position() blocks inside _wait_until_not_pause() while the controller is
         // paused, and inside _wait_until_cmdnum_lt_max() once the 512 deep command cache
@@ -1463,6 +1538,57 @@ namespace uf_robot_hardware
         curr_write_time_ = node_->get_clock()->now();
         bool servo_heartbeat_due = cartesian_servo_mode_
             && curr_write_time_.seconds() - prev_write_time_.seconds() > 1;
+        // Until the controller starts from the arm, the buffer is from before the fault.
+        if (command_guard_) {
+            double pos_m, rot_rad;
+            _command_gap(pos_m, rot_rad);
+            const double now_s = node_->now().seconds();
+            if (pos_m < 0.025 && rot_rad < 0.05) {
+                command_guard_ = false;
+                for (int i = 0; i < 6; i++) prev_tcp_cmds_[i] = tcp_cmds_[i];
+                RCLCPP_INFO(LOGGER, "[%s] The command is back at the arm: sending again", robot_ip_.c_str());
+            }
+            else {
+                trace.why = "stale_cmd";
+                RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
+                    "[%s] Holding: the command is %.0f mm / %.1f deg from the arm, waiting for the "
+                    "controller to start from where it is", robot_ip_.c_str(), pos_m * 1000.0,
+                    rot_rad * 180.0 / M_PI);
+                if (now_s - command_guard_since_ > 5.0) {
+                    RCLCPP_ERROR(LOGGER, "[%s] The command is still not at the arm after 5 s: "
+                        "restarting the controllers so they start from it", robot_ip_.c_str());
+                    initialized_ = false;
+                    command_guard_ = false;
+                    _deactivate_controller();
+                }
+                return hardware_interface::return_type::OK;
+            }
+        }
+        if (cartesian_servo_mode_) {
+            double pos_m, rot_rad;
+            _command_gap(pos_m, rot_rad);
+            if (pos_m * 1000.0 > servo_max_jump_mm_ || rot_rad * 180.0 / M_PI > servo_max_jump_deg_) {
+                trace.why = "jump_refused";
+                RCLCPP_ERROR_THROTTLE(LOGGER, *node_->get_clock(), 2000,
+                    "[%s] Refusing a servo command %.0f mm / %.1f deg from the arm (limit %.0f mm / "
+                    "%.0f deg)", robot_ip_.c_str(), pos_m * 1000.0, rot_rad * 180.0 / M_PI,
+                    servo_max_jump_mm_, servo_max_jump_deg_);
+                // Stuck off the arm: restart the controllers so they start from it.
+                const double now_s = node_->now().seconds();
+                if (jump_refused_since_ < 0.0) {
+                    jump_refused_since_ = now_s;
+                }
+                else if (now_s - jump_refused_since_ > 1.5) {
+                    RCLCPP_ERROR(LOGGER, "[%s] The command stayed off the arm for 1.5 s: restarting the "
+                        "controllers so they start from where the arm is", robot_ip_.c_str());
+                    jump_refused_since_ = -1.0;
+                    initialized_ = false;
+                    _deactivate_controller();
+                }
+                return hardware_interface::return_type::OK;
+            }
+            jump_refused_since_ = -1.0;
+        }
         const bool cmd_valid = _tcp_cmd_is_valid();
         const bool cmd_changed = cmd_valid && _tcp_cmds_is_change();
         if (cmd_valid && (cmd_changed || servo_heartbeat_due)) {
@@ -1543,6 +1669,7 @@ namespace uf_robot_hardware
         if (ret == 0 && res_list_controller_->controller.size() > 0) {
             req_switch_controller_->activate_controllers.resize(0);
             req_switch_controller_->deactivate_controllers.clear();
+            deactivated_controllers_.clear();
             for (uint i = 0; i < res_list_controller_->controller.size(); i++) {
                 // The force control controller commands no motion, and it is the only way
                 // to disarm the force loop. Leave it running: it is needed most exactly
@@ -1551,6 +1678,7 @@ namespace uf_robot_hardware
                 if(res_list_controller_->controller[i].state == std::string("active")){
                 // for situation of initial launch with emg stop pressed, launch file will activate controller and it takes a while
                     valid_operation = true;
+                    deactivated_controllers_.push_back(res_list_controller_->controller[i].name);
                 }
                 req_switch_controller_->deactivate_controllers.push_back(res_list_controller_->controller[i].name);
             }
@@ -1564,22 +1692,28 @@ namespace uf_robot_hardware
         }
     }
 
-    void UFRobotSystemHardware::_activate_controller(void) {
-        // RCLCPP_INFO(LOGGER, "ACTIVATE CONTROLLER!! ");
+    bool UFRobotSystemHardware::_activate_controller(void) {
+        // Bring back what _deactivate_controller() switched off, and say whether it is all active.
         int ret = _call_request(client_list_controller_, req_list_controller_, res_list_controller_);
-        if (ret == 0 && res_list_controller_->controller.size() > 0) {
-            req_switch_controller_->deactivate_controllers.resize(0);
-            req_switch_controller_->activate_controllers.clear();
-            for (uint i = 0; i < res_list_controller_->controller.size(); i++) {
-                // Never deactivated above, so never needs reactivating here.
-                if (_is_ft_controller(res_list_controller_->controller[i])) continue;
-                req_switch_controller_->activate_controllers.push_back(res_list_controller_->controller[i].name);
+        if (ret != 0) return false;
+        std::vector<std::string> to_activate;
+        for (const auto & name : deactivated_controllers_) {
+            bool active = false;
+            for (const auto & listed : res_list_controller_->controller) {
+                if (listed.name == name && listed.state == std::string("active")) active = true;
             }
-            req_switch_controller_->strictness = controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT;
-            req_switch_controller_->timeout = rclcpp::Duration::from_seconds(2.0);
-            _call_request(client_switch_controller_, req_switch_controller_, res_switch_controller_);
+            if (!active) to_activate.push_back(name);
         }
-        update_goal_state_pub_->publish(update_goal_state_msg_);
+        if (to_activate.empty()) {
+            update_goal_state_pub_->publish(update_goal_state_msg_);
+            return true;
+        }
+        req_switch_controller_->deactivate_controllers.resize(0);
+        req_switch_controller_->activate_controllers = to_activate;
+        req_switch_controller_->strictness = controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT;
+        req_switch_controller_->timeout = rclcpp::Duration::from_seconds(2.0);
+        _call_request(client_switch_controller_, req_switch_controller_, res_switch_controller_);
+        return false;
     }
 
     bool UFRobotSystemHardware::_check_cmds_is_change(float *prev, float *cur, double threshold)
