@@ -1432,6 +1432,16 @@ namespace uf_robot_hardware
                     reactivate_controller_later_ = false;
                     RCLCPP_INFO(LOGGER, "[%s] The controllers are active again", robot_ip_.c_str());
                 }
+                else if (!cartesian_servo_mode_) {
+                    // Each attempt blocks this loop for up to a second (the service calls
+                    // wait for an answer), and the lift and everything else on this loop
+                    // stall with it. POSE (what the behavior tree moves the arm in) asks
+                    // once and leaves the rest to whoever activates the controllers next;
+                    // only SERVO (teleop) keeps asking until they are confirmed.
+                    reactivate_controller_later_ = false;
+                    RCLCPP_WARN(LOGGER, "[%s] The controllers were asked back once (POSE mode): "
+                        "not asking again", robot_ip_.c_str());
+                }
                 else {
                     next_reactivate_attempt_ = node_->now().seconds() + 1.0;
                     RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
