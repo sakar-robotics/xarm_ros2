@@ -182,10 +182,22 @@ namespace uf_robot_hardware
         float servo_max_jump_mm_ = 300.0;
         float servo_max_jump_deg_ = 45.0;
         double jump_refused_since_ = -1.0;  // seconds, < 0: nothing is being refused
-        // What _deactivate_controller() switched off, asked back on until it is active (the call can
-        // time out inside the loop that makes it).
+        // What _controllers_step() switched off and has not yet seen active again. Names are added
+        // at every fault and dropped only once a list says they are active, so a retry that gave
+        // up halfway can never lose one.
         std::vector<std::string> deactivated_controllers_;
-        double next_reactivate_attempt_ = 0.0;
+        // The list/switch calls in flight, one at a time. Nothing waits for an answer: write() runs
+        // inside the controller manager's update loop, and a switch cannot finish until write()
+        // returns.
+        enum class CtlStep { kIdle, kListing, kSwitching };
+        CtlStep ctl_step_ = CtlStep::kIdle;
+        bool ctl_to_off_ = false;  // what the call in flight is for
+        bool ctl_restart_ = false;  // the guards want them switched off and back
+        double ctl_deadline_ = 0.0;
+        double next_ctl_attempt_ = 0.0;
+        int64_t ctl_request_id_ = 0;
+        std::shared_future<controller_manager_msgs::srv::ListControllers::Response::SharedPtr> list_future_;
+        std::shared_future<controller_manager_msgs::srv::SwitchController::Response::SharedPtr> switch_future_;
         void _reseed_tcp_commands(void);
         void _flush_after_recovery(void);
         void _command_gap(double & pos_m, double & rot_rad);
@@ -237,8 +249,7 @@ namespace uf_robot_hardware
 
         bool _need_reset(void);
 
-        void _deactivate_controller(void);
-        bool _activate_controller(void);
+        void _controllers_step(bool arm_not_ready);
 
         void _init_ufactory_driver(void);
 
