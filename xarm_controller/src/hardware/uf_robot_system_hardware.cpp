@@ -1417,7 +1417,7 @@ namespace uf_robot_hardware
 
         if (_need_reset()) {
             initialized_ = false;
-            _deactivate_controller();
+            _controllers_step(true);
             return hardware_interface::return_type::OK;
         }
         const bool was_initialized = initialized_;
@@ -1425,30 +1425,8 @@ namespace uf_robot_hardware
         if (!was_initialized) {
             _flush_after_recovery();
         }
-        if (reactivate_controller_later_) {
-            const double now_s = node_->now().seconds();
-            if (now_s >= next_reactivate_attempt_) {
-                if (_activate_controller()) {
-                    reactivate_controller_later_ = false;
-                    RCLCPP_INFO(LOGGER, "[%s] The controllers are active again", robot_ip_.c_str());
-                }
-                else if (!cartesian_servo_mode_) {
-                    // Each attempt blocks this loop for up to a second (the service calls
-                    // wait for an answer), and the lift and everything else on this loop
-                    // stall with it. POSE (what the behavior tree moves the arm in) asks
-                    // once and leaves the rest to whoever activates the controllers next;
-                    // only SERVO (teleop) keeps asking until they are confirmed.
-                    reactivate_controller_later_ = false;
-                    RCLCPP_WARN(LOGGER, "[%s] The controllers were asked back once (POSE mode): "
-                        "not asking again", robot_ip_.c_str());
-                }
-                else {
-                    next_reactivate_attempt_ = node_->now().seconds() + 1.0;
-                    RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
-                        "[%s] The controllers are not active yet: asking again", robot_ip_.c_str());
-                }
-            }
-        }
+        // Brings back what a fault switched off, until every one of them is seen active.
+        _controllers_step(false);
         // set_position() blocks inside _wait_until_not_pause() while the controller is
         // paused, and inside _wait_until_cmdnum_lt_max() once the 512 deep command cache
         // fills. XArmAPI is constructed with check_is_pause and check_cmdnum_limit true
@@ -1501,7 +1479,7 @@ namespace uf_robot_hardware
                         "restarting the controllers so they start from it", robot_ip_.c_str());
                     initialized_ = false;
                     command_guard_ = false;
-                    _deactivate_controller();
+                    ctl_restart_ = true;
                 }
                 return hardware_interface::return_type::OK;
             }
@@ -1524,7 +1502,7 @@ namespace uf_robot_hardware
                         "controllers so they start from where the arm is", robot_ip_.c_str());
                     jump_refused_since_ = -1.0;
                     initialized_ = false;
-                    _deactivate_controller();
+                    ctl_restart_ = true;
                 }
                 return hardware_interface::return_type::OK;
             }
@@ -1595,60 +1573,148 @@ namespace uf_robot_hardware
         return true;
     }
 
-    void UFRobotSystemHardware::_deactivate_controller(void) {
-        if(reactivate_controller_later_)
-            return;
-        // RCLCPP_INFO(LOGGER, "DEACTIVATE CONTROLLER!! ");
-        int ret = _call_request(client_list_controller_, req_list_controller_, res_list_controller_);
-        bool valid_operation = false;
-        if (ret == 0 && res_list_controller_->controller.size() > 0) {
-            req_switch_controller_->activate_controllers.resize(0);
-            req_switch_controller_->deactivate_controllers.clear();
-            deactivated_controllers_.clear();
-            for (uint i = 0; i < res_list_controller_->controller.size(); i++) {
-                // The force control controller commands no motion, and it is the only way
-                // to disarm the force loop. Leave it running: it is needed most exactly
-                // when the arm is in the state that got us here.
-                if (_is_ft_controller(res_list_controller_->controller[i])) continue;
-                if(res_list_controller_->controller[i].state == std::string("active")){
-                // for situation of initial launch with emg stop pressed, launch file will activate controller and it takes a while
-                    valid_operation = true;
-                    deactivated_controllers_.push_back(res_list_controller_->controller[i].name);
-                }
-                req_switch_controller_->deactivate_controllers.push_back(res_list_controller_->controller[i].name);
-            }
-            req_switch_controller_->strictness = controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT;
-            req_switch_controller_->timeout = rclcpp::Duration::from_seconds(2.0);
-            if(valid_operation)
-            {
-                _call_request(client_switch_controller_, req_switch_controller_, res_switch_controller_);
-                reactivate_controller_later_ = true; // Not setting this indicator until activated controller disabled!
-            }
-        }
-    }
+    // Switches the controllers off while the arm is not ready (or a guard asks for a restart) and
+    // back on once it is, one small step per call and never waiting for the controller manager: a
+    // switch can only finish once write() returns, so waiting for it here stalled the whole loop
+    // (the lift with it) for up to a second a try. Each call sends a list or a switch request, or
+    // looks at the answer to the one in flight, and returns.
+    //
+    // Names are kept in deactivated_controllers_ until a list shows them active, whatever happens
+    // to a try, so it keeps asking in POSE and SERVO alike until they are all back.
+    void UFRobotSystemHardware::_controllers_step(bool arm_not_ready)
+    {
+        using ListControllers = controller_manager_msgs::srv::ListControllers;
+        using SwitchController = controller_manager_msgs::srv::SwitchController;
+        const double now_s = node_->now().seconds();
+        const bool want_off = arm_not_ready || ctl_restart_;
 
-    bool UFRobotSystemHardware::_activate_controller(void) {
-        // Bring back what _deactivate_controller() switched off, and say whether it is all active.
-        int ret = _call_request(client_list_controller_, req_list_controller_, res_list_controller_);
-        if (ret != 0) return false;
-        std::vector<std::string> to_activate;
-        for (const auto & name : deactivated_controllers_) {
-            bool active = false;
-            for (const auto & listed : res_list_controller_->controller) {
-                if (listed.name == name && listed.state == std::string("active")) active = true;
+        if (ctl_step_ != CtlStep::kIdle) {
+            rclcpp::spin_some(hw_node_);  // delivers the answers; does not wait for any
+        }
+
+        auto send_switch = [&](std::shared_ptr<SwitchController::Request> request) {
+            request->strictness = SwitchController::Request::BEST_EFFORT;
+            request->timeout = rclcpp::Duration::from_seconds(2.0);
+            auto sent = client_switch_controller_->async_send_request(request);
+            ctl_request_id_ = sent.request_id;
+            switch_future_ = sent.future.share();
+            ctl_deadline_ = now_s + 5.0;
+            ctl_step_ = CtlStep::kSwitching;
+        };
+
+        if (ctl_step_ == CtlStep::kSwitching) {
+            if (switch_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                if (now_s > ctl_deadline_) {
+                    client_switch_controller_->remove_pending_request(ctl_request_id_);
+                    ctl_step_ = CtlStep::kIdle;
+                    next_ctl_attempt_ = now_s + 1.0;
+                    RCLCPP_WARN(LOGGER, "[%s] switch_controller did not answer: asking again",
+                        robot_ip_.c_str());
+                }
+                return;
             }
-            if (!active) to_activate.push_back(name);
+            ctl_step_ = CtlStep::kIdle;
+            if (!switch_future_.get()->ok) {
+                next_ctl_attempt_ = now_s + 1.0;
+                RCLCPP_WARN(LOGGER, "[%s] switch_controller refused: asking again", robot_ip_.c_str());
+            }
+            else {
+                // The next list says whether it took.
+                next_ctl_attempt_ = now_s + (ctl_to_off_ ? 0.0 : 0.2);
+            }
+            return;
         }
-        if (to_activate.empty()) {
-            update_goal_state_pub_->publish(update_goal_state_msg_);
-            return true;
+
+        if (ctl_step_ == CtlStep::kListing) {
+            if (list_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                if (now_s > ctl_deadline_) {
+                    client_list_controller_->remove_pending_request(ctl_request_id_);
+                    ctl_step_ = CtlStep::kIdle;
+                    next_ctl_attempt_ = now_s + 1.0;
+                    RCLCPP_WARN(LOGGER, "[%s] list_controllers did not answer: asking again",
+                        robot_ip_.c_str());
+                }
+                return;
+            }
+            ctl_step_ = CtlStep::kIdle;
+            const auto listed = list_future_.get();
+            if (ctl_to_off_ != want_off) {
+                return;  // the arm changed state while this was in flight: start over
+            }
+            if (ctl_to_off_) {
+                // The force control controller commands no motion, and it is the only way to
+                // disarm the force loop. Leave it running: it is needed most exactly when the arm
+                // is in the state that got us here.
+                std::vector<std::string> active;
+                for (const auto & controller : listed->controller) {
+                    if (controller.state == std::string("active") && !_is_ft_controller(controller)) {
+                        active.push_back(controller.name);
+                    }
+                }
+                // Still looked at once a second: a launch with the e-stop pressed activates its
+                // controllers a little late.
+                next_ctl_attempt_ = now_s + 1.0;
+                if (active.empty()) {
+                    if (ctl_restart_ && !arm_not_ready) {
+                        ctl_restart_ = false;  // they are off: now they come back
+                        next_ctl_attempt_ = 0.0;
+                    }
+                    return;
+                }
+                for (const auto & name : active) {
+                    if (std::find(deactivated_controllers_.begin(), deactivated_controllers_.end(), name)
+                        == deactivated_controllers_.end()) {
+                        deactivated_controllers_.push_back(name);
+                    }
+                }
+                reactivate_controller_later_ = true;
+                auto request = std::make_shared<SwitchController::Request>();
+                request->deactivate_controllers = active;
+                send_switch(request);
+                return;
+            }
+            // Coming back on: drop what is confirmed active, ask for the rest.
+            deactivated_controllers_.erase(
+                std::remove_if(deactivated_controllers_.begin(), deactivated_controllers_.end(),
+                    [&](const std::string & name) {
+                        for (const auto & controller : listed->controller) {
+                            if (controller.name == name && controller.state == std::string("active")) return true;
+                        }
+                        return false;
+                    }),
+                deactivated_controllers_.end());
+            if (deactivated_controllers_.empty()) {
+                reactivate_controller_later_ = false;
+                update_goal_state_pub_->publish(update_goal_state_msg_);
+                RCLCPP_INFO(LOGGER, "[%s] The controllers are active again", robot_ip_.c_str());
+                return;
+            }
+            auto request = std::make_shared<SwitchController::Request>();
+            request->activate_controllers = deactivated_controllers_;
+            send_switch(request);
+            return;
         }
-        req_switch_controller_->deactivate_controllers.resize(0);
-        req_switch_controller_->activate_controllers = to_activate;
-        req_switch_controller_->strictness = controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT;
-        req_switch_controller_->timeout = rclcpp::Duration::from_seconds(2.0);
-        _call_request(client_switch_controller_, req_switch_controller_, res_switch_controller_);
-        return false;
+
+        // Idle.
+        if (now_s < next_ctl_attempt_) {
+            return;
+        }
+        if (!want_off && deactivated_controllers_.empty()) {
+            return;
+        }
+        if (!client_list_controller_->service_is_ready() || !client_switch_controller_->service_is_ready()) {
+            next_ctl_attempt_ = now_s + 1.0;
+            RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 2000,
+                "[%s] The controller manager's services are not there yet: asking again",
+                robot_ip_.c_str());
+            return;
+        }
+        ctl_to_off_ = want_off;
+        auto sent = client_list_controller_->async_send_request(std::make_shared<ListControllers::Request>());
+        ctl_request_id_ = sent.request_id;
+        list_future_ = sent.future.share();
+        ctl_deadline_ = now_s + 3.0;
+        ctl_step_ = CtlStep::kListing;
     }
 
     bool UFRobotSystemHardware::_check_cmds_is_change(float *prev, float *cur, double threshold)
